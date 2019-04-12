@@ -1,16 +1,18 @@
+"""
+Module to create a reference catalog derived from a star grid instance
+catalog.
+"""
 import os
 import sys
 import lsst.utils
 from lsst.sims.photUtils import BandpassDict
 import desc.imsim
 
-bp_dict = BandpassDict.loadTotalBandpassesFromFiles()
-redshift = 0
-iAv = 0
-iRv = 3.1
-sed_file \
-    = os.path.join(lsst.utils.getPackageDir('sims_sed_library'),
-                   'starSED/phoSimMLT/lte037-5.5-1.0a+0.4.BT-Settl.spec.gz')
+def sed_file_path(sed_file):
+    return os.path.join(lsst.utils.getPackageDir('sims_sed_library'), sed_file)
+
+def make_reference_catalog(instcat, outfile=None):
+    bp_dict = BandpassDict.loadTotalBandpassesFromFiles()
 
 visit = 169767
 band = 'y'
