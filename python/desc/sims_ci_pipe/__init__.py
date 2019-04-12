@@ -1,1 +1,1 @@
-from .make_star_grid_inst_cat import *
+from .make_star_grid_instcat import *

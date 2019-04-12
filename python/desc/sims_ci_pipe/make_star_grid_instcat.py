@@ -30,7 +30,7 @@ def shuffled_mags(star_cat, mag_range=(16.3, 21)):
     np.array of mag_norm values.
     """
     mags = []
-    with desc.imsim.fopen(star_cat, 'rt') as fd:
+    with desc.imsim.fopen(star_cat, mode='rt') as fd:
         for line in fd:
             tokens = line.split()
             mag = float(tokens[4])
@@ -136,7 +136,7 @@ def make_star_grid_instcat(butler, instcat, detectors=None, x_pixels=None,
     mags.sort()
 
     outdir = 'v{visit}-{band}_grid'.format(**locals())
-    os.makedirs(outdir, exists_ok=True)
+    os.makedirs(outdir, exist_ok=True)
 
     star_grid_cat = 'star_grid_{visit}.txt'.format(**locals())
     write_phosim_cat(instcat, outdir, star_grid_cat)
@@ -173,13 +173,15 @@ def make_reference_catalog(instcat, outfile=None):
     star_cat, visit, band = parse_instcat(instcat)
 
     if outfile is None:
-        outfile = 'reference_catalog_v{visit}.txt'.format(**locals())
+        outfile = 'reference_catalog_v{visit}-{band}.txt'.format(**locals())
 
-    # Assume we are dealing only with stars, so set internal
+    # Assume we are dealing only with stars, so set redshift and internal
     # extinction to zero.
+    redshift = 0
     iAv, iRv = 0, 3.1
 
-    with desc.imsim.fopen(star_cat, 'rt') as fd, open(outfile, 'w') as output:
+    with desc.imsim.fopen(star_cat, mode='rt') as fd, \
+         open(outfile, 'w') as output:
         output.write('# id ra dec sigma_ra sigma_dec ra_smeared dec_smeared u sigma_u g sigma_g r sigma_r i sigma_i z sigma_z y sigma_y u_smeared g_smeared r_smeared i_smeared z_smeared y_smeared u_rms g_rms r_rms i_rms z_rms y_rms isresolved isagn properMotionRa properMotionDec parallax radialVelocity\n')
         for i, line in enumerate(fd):
             tokens = line.split()
