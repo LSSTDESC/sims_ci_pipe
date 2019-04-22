@@ -5,13 +5,26 @@ mag_norm values derived from a simulated visit.
 import os
 import sys
 import warnings
+from collections import OrderedDict
 import numpy as np
-import lsst.daf.persistence as dp
 import lsst.utils
 from lsst.sims.photUtils import BandpassDict
+from lsst.sims.GalSimInterface import LSSTCameraWrapper
+from lsst.sims.GalSimInterface.wcsUtils import tanSipWcsFromDetector
+import lsst.obs.lsst as obs_lsst
 import desc.imsim
 
 __all__ = ['make_star_grid_instcat', 'make_reference_catalog']
+
+camera = obs_lsst.imsim.ImsimMapper().camera
+det_name = OrderedDict()
+old_det_name = OrderedDict()
+for i, det in enumerate(camera):
+    det_name[i] = det.getName()
+    old_det_name[i] \
+        = 'R:{},{} S:{},{}'.format(*[_ for _ in det_name[i] if _.isdigit()])
+
+camera_wrapper = LSSTCameraWrapper()
 
 def shuffled_mags(star_cat, mag_range=(16.3, 21)):
     """
@@ -92,17 +105,15 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
                 output.write(line)
         output.write('includeobj {}\n'.format(star_grid_cat))
 
-def make_star_grid_instcat(butler, instcat, detectors=None, x_pixels=None,
+def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                            y_pixels=None, mag_range=(16.3, 21)):
     """
-    Create an instance catalog consisting of grids of stars on each chip,
-    using the raw files and instance catalog from a simulated visit to
-    provide the WCS info per CCD and visit information.
+    Create an instance catalog consisting of grids of stars on each
+    chip, using the instance catalog from a simulated visit to provide
+    the info for constructing the WCS per CCD.
 
     Parameters
     ----------
-    butler: lsst.daf.persistence.Butler
-        The butler pointing to the repo with the desired raw files.
     instcat: str
         The instance catalog corresponding to the desired visit.
     detectors: sequence of ints [None]
@@ -123,13 +134,15 @@ def make_star_grid_instcat(butler, instcat, detectors=None, x_pixels=None,
     if detectors is None:
         detectors = range(189)
     if x_pixels is None:
-        x_pixels = np.linspace(150, 4050, 40)
+        x_pixels = np.linspace(200, 3800, 36)
     if y_pixels is None:
-        y_pixels = np.linspace(100, 3900, 39)
+        y_pixels = np.linspace(200, 3800, 36)
 
     template = "object {id} {ra:.15f} {dec:.15f} {mag:.8f} starSED/phoSimMLT/lte037-5.5-1.0a+0.4.BT-Settl.spec.gz 0 0 0 0 0 0 point none CCM 0.04056722 3.1\n"
 
     star_cat, visit, band = parse_instcat(instcat)
+    obs_md \
+        = desc.imsim.phosim_obs_metadata(desc.imsim.metadata_from_file(instcat))
 
     num_stars = len(x_pixels)*len(y_pixels)
     mags = shuffled_mags(star_cat)[:num_stars]
@@ -141,21 +154,14 @@ def make_star_grid_instcat(butler, instcat, detectors=None, x_pixels=None,
     star_grid_cat = 'star_grid_{visit}.txt'.format(**locals())
     write_phosim_cat(instcat, outdir, star_grid_cat)
 
-    missing_detectors = []
-
     outfile = os.path.join(outdir, star_grid_cat)
     with open(outfile, 'w') as output:
         id = 0
         for detector in detectors:
             print("processing", detector)
             dataId = dict(visit=visit, detector=detector)
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore')
-                try:
-                    wcs = butler.get('raw', dataId=dataId).getWcs()
-                except Exception as eobj:
-                    print(eobj)
-                    missing_detectors.append(detector)
+            wcs = tanSipWcsFromDetector(old_det_name[detector], camera_wrapper,
+                                        obs_md, epoch=2000.)
             for x_pix in x_pixels:
                 for y_pix in y_pixels:
                     ra, dec = [_.asDegrees() for _ in
@@ -163,7 +169,6 @@ def make_star_grid_instcat(butler, instcat, detectors=None, x_pixels=None,
                     mag = mags[id % num_stars]
                     output.write(template.format(**locals()))
                     id += 1
-    return missing_detectors
 
 def sed_file_path(sed_file):
     return os.path.join(lsst.utils.getPackageDir('sims_sed_library'), sed_file)
