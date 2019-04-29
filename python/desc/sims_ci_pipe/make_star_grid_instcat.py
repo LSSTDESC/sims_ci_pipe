@@ -3,8 +3,6 @@ Module to create an instance catalog of stars on a grid with a range of
 mag_norm values derived from a simulated visit.
 """
 import os
-import sys
-import warnings
 from collections import OrderedDict
 import numpy as np
 import lsst.utils
@@ -20,11 +18,9 @@ __all__ = ['make_star_grid_instcat', 'make_reference_catalog']
 
 camera = obs_lsst.imsim.ImsimMapper().camera
 det_name = OrderedDict()
-old_det_name = OrderedDict()
 for i, det in enumerate(camera):
-    det_name[i] = det.getName()
-    old_det_name[i] \
-        = 'R:{},{} S:{},{}'.format(*[_ for _ in det_name[i] if _.isdigit()])
+    det_name[i] \
+        = 'R:{},{} S:{},{}'.format(*[_ for _ in det.getName() if _.isdigit()])
 
 camera_wrapper = LSSTCameraWrapper()
 
@@ -50,7 +46,7 @@ def shuffled_mags(star_cat, mag_range=(16.3, 21)):
         for line in fd:
             tokens = line.split()
             mag = float(tokens[4])
-            if mag > mag_range[0] and mag < mag_range[1]:
+            if mag_range[0] < mag < mag_range[1]:
                 mags.append(mag)
     np.random.shuffle(mags)
     return np.array(mags)
@@ -137,7 +133,7 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
 
     Returns
     -------
-    full path to the star grid instance catalog.
+    The full path to the star grid instance catalog.
     """
     if detectors is None:
         detectors = range(189)
@@ -146,14 +142,14 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
     if y_pixels is None:
         y_pixels = np.linspace(200, 3800, 36)
 
-    template = "object {id} {ra:.15f} {dec:.15f} {mag:.8f} starSED/phoSimMLT/lte037-5.5-1.0a+0.4.BT-Settl.spec.gz 0 0 0 0 0 0 point none CCM 0.04056722 3.1\n"
+    template = "object {my_id} {ra:.15f} {dec:.15f} {mag:.8f} starSED/phoSimMLT/lte037-5.5-1.0a+0.4.BT-Settl.spec.gz 0 0 0 0 0 0 point none CCM 0.04056722 3.1\n"
 
     star_cat, visit, band = parse_instcat(instcat)
     obs_md \
         = desc.imsim.phosim_obs_metadata(desc.imsim.metadata_from_file(instcat))
 
     num_stars = len(x_pixels)*len(y_pixels)
-    mags = shuffled_mags(star_cat)[:num_stars]
+    mags = shuffled_mags(star_cat, mag_range=mag_range)[:num_stars]
     mags.sort()
 
     outdir = 'v{visit}-{band}_grid'.format(**locals())
@@ -164,27 +160,39 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
 
     outfile = os.path.join(outdir, star_grid_cat)
     with open(outfile, 'w') as output:
-        id = 0
+        my_id = 0
         for detector in detectors:
             print("processing", detector)
-            dataId = dict(visit=visit, detector=detector)
-            wcs = tanSipWcsFromDetector(old_det_name[detector], camera_wrapper,
+            wcs = tanSipWcsFromDetector(det_name[detector], camera_wrapper,
                                         obs_md, epoch=2000.)
             for x_pix in x_pixels:
                 for y_pix in y_pixels:
                     ra, dec = [_.asDegrees() for _ in
                                wcs.pixelToSky(x_pix, y_pix)]
-                    mag = mags[id % num_stars]
+                    mag = mags[my_id % num_stars]
                     output.write(template.format(**locals()))
-                    id += 1
+                    my_id += 1
     return phosim_cat_file
 
 
 def sed_file_path(sed_file):
+    """Return the path to the SED file."""
     return os.path.join(lsst.utils.getPackageDir('sims_sed_library'), sed_file)
 
 
 def make_reference_catalog(instcat, outfile=None):
+    """
+    Make a reference catalog corresponding to an instance catalog of stars.
+
+    Parameters
+    ----------
+    instcat: str
+        Instance catalog to provide the reference catalog objects.
+
+    Returns
+    -------
+    The full path to the reference catalog that was created.
+    """
     bp_dict = BandpassDict.loadTotalBandpassesFromFiles()
     star_cat, visit, band = parse_instcat(instcat)
 
@@ -201,7 +209,7 @@ def make_reference_catalog(instcat, outfile=None):
         output.write('# id ra dec sigma_ra sigma_dec ra_smeared dec_smeared u sigma_u g sigma_g r sigma_r i sigma_i z sigma_z y sigma_y u_smeared g_smeared r_smeared i_smeared z_smeared y_smeared u_rms g_rms r_rms i_rms z_rms y_rms isresolved isagn properMotionRa properMotionDec parallax radialVelocity\n')
         for i, line in enumerate(fd):
             tokens = line.split()
-            id = tokens[1]
+            my_id = tokens[1]
             ra = float(tokens[2])
             dec = float(tokens[3])
             mag_norm = float(tokens[4])
@@ -216,4 +224,6 @@ def make_reference_catalog(instcat, outfile=None):
             i = sed_obj.calcMag(bp_dict['i'])
             z = sed_obj.calcMag(bp_dict['z'])
             y = sed_obj.calcMag(bp_dict['y'])
-            output.write('{id}, {ra:.10f}, {dec:.10f}, 0.000000027778, 0.000000027778, {ra:.10f}, {dec:.10f}, {u:.5f}, 0.001, {g:.5f}, 0.001, {r:.5f}, 0.001, {i:.5f}, 0.001, {z:.5f}, 0.001, {y:.5f}, 0.001,  {u:.5f}, {g:.5f}, {r:.5f}, {i:.5f}, {z:.5f}, {y:.5f}, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0\n'.format(**locals()))
+            output.write('{my_id}, {ra:.10f}, {dec:.10f}, 0.000000027778, 0.000000027778, {ra:.10f}, {dec:.10f}, {u:.5f}, 0.001, {g:.5f}, 0.001, {r:.5f}, 0.001, {i:.5f}, 0.001, {z:.5f}, 0.001, {y:.5f}, 0.001,  {u:.5f}, {g:.5f}, {r:.5f}, {i:.5f}, {z:.5f}, {y:.5f}, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0\n'.format(**locals()))
+
+    return os.path.abspath(outfile)
