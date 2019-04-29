@@ -14,7 +14,9 @@ from lsst.sims.GalSimInterface.wcsUtils import tanSipWcsFromDetector
 import lsst.obs.lsst as obs_lsst
 import desc.imsim
 
+
 __all__ = ['make_star_grid_instcat', 'make_reference_catalog']
+
 
 camera = obs_lsst.imsim.ImsimMapper().camera
 det_name = OrderedDict()
@@ -26,9 +28,10 @@ for i, det in enumerate(camera):
 
 camera_wrapper = LSSTCameraWrapper()
 
+
 def shuffled_mags(star_cat, mag_range=(16.3, 21)):
     """
-    Extract the mag_norm values from star_dat and shuffle them
+    Extract the mag_norm values from star_cat and shuffle them
     so that they can be sampled without replacement.
 
     Parameters
@@ -51,6 +54,7 @@ def shuffled_mags(star_cat, mag_range=(16.3, 21)):
                 mags.append(mag)
     np.random.shuffle(mags)
     return np.array(mags)
+
 
 def parse_instcat(instcat):
     """
@@ -80,6 +84,7 @@ def parse_instcat(instcat):
                 band = 'ugrizy'[int(line.strip().split()[-1])]
     return os.path.join(instcat_dir, star_cat), visit, band
 
+
 def write_phosim_cat(instcat, outdir, star_grid_cat):
     """
     Write an updated version of the phosim_cat file with the star_grid_cat
@@ -96,14 +101,17 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
 
     Returns
     -------
-    None
+    full path to the phosim_cat file.
     """
     outfile = os.path.join(outdir, os.path.basename(instcat))
     with open(instcat, 'r') as fd, open(outfile, 'w') as output:
         for line in fd:
-            if not line.startswith('includeobj'):
+            if (not line.startswith('includeobj')
+                and not line.startswith('minsource')):
                 output.write(line)
         output.write('includeobj {}\n'.format(star_grid_cat))
+    return os.path.abspath(outfile)
+
 
 def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                            y_pixels=None, mag_range=(16.3, 21)):
@@ -129,7 +137,7 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
 
     Returns
     -------
-    list of missing detectors for the specified visit.
+    full path to the star grid instance catalog.
     """
     if detectors is None:
         detectors = range(189)
@@ -152,7 +160,7 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
     os.makedirs(outdir, exist_ok=True)
 
     star_grid_cat = 'star_grid_{visit}.txt'.format(**locals())
-    write_phosim_cat(instcat, outdir, star_grid_cat)
+    phosim_cat_file = write_phosim_cat(instcat, outdir, star_grid_cat)
 
     outfile = os.path.join(outdir, star_grid_cat)
     with open(outfile, 'w') as output:
@@ -169,9 +177,12 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                     mag = mags[id % num_stars]
                     output.write(template.format(**locals()))
                     id += 1
+    return phosim_cat_file
+
 
 def sed_file_path(sed_file):
     return os.path.join(lsst.utils.getPackageDir('sims_sed_library'), sed_file)
+
 
 def make_reference_catalog(instcat, outfile=None):
     bp_dict = BandpassDict.loadTotalBandpassesFromFiles()
