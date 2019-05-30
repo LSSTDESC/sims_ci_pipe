@@ -110,7 +110,8 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
 
 
 def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
-                           y_pixels=None, mag_range=(16.3, 21)):
+                           y_pixels=None, mag_range=(16.3, 21),
+                           max_xy_offset=0):
     """
     Create an instance catalog consisting of grids of stars on each
     chip, using the instance catalog from a simulated visit to provide
@@ -130,6 +131,12 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
         then use np.linspace(100, 3900, 39).
     mag_range: tuple [(16.3, 21)]
         Range of mag_norm values to sample from the input star_cat file.
+    max_xy_offset: float [0]
+        Maximum offset in pixels to be drawn in both x- and
+        y-directions to displace each star from its nominal grid
+        position.  These offsets helps prevent failures in the
+        astrometric solution that arises from trying to match to a
+        regular grid of reference stars.
 
     Returns
     -------
@@ -167,8 +174,9 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                                         obs_md, epoch=2000.)
             for x_pix in x_pixels:
                 for y_pix in y_pixels:
+                    dx, dy = np.random.uniform(high=max_xy_offset, size=2)
                     ra, dec = [_.asDegrees() for _ in
-                               wcs.pixelToSky(x_pix, y_pix)]
+                               wcs.pixelToSky(x_pix + dx, y_pix + dy)]
                     mag = mags[my_id % num_stars]
                     output.write(template.format(**locals()))
                     my_id += 1
