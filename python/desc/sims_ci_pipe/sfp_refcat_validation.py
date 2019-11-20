@@ -259,7 +259,8 @@ def get_center_radec(butler, visit, opsim_db=None):
         df = pd.read_sql('select descDitheredRA, descDitheredDec '
                          'from Summary where '
                          f'obshistid={visit} limit 1', conn)
-        return np.degrees(df.iloc[0].coord_ra), np.degrees(df.iloc[0].coord_dec)
+        return (np.degrees(df.iloc[0].descDitheredRA),
+                np.degrees(df.iloc[0].descDitheredDec))
     ref_cat = RefCat(butler)
     ras, decs = [], []
     for dataref in butler.subset('calexp', visit=visit):
