@@ -169,7 +169,7 @@ def get_ref_cat(butler, visit, center_radec, radius=2.1):
 
 
 def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
-                        flux_type='base_PsfFlux'):
+                        max_offset=0.1, flux_type='base_PsfFlux'):
     """
     Perform point source matching on each dataref/sensor in a visit.
     """
@@ -183,6 +183,7 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
     for i, dataref in enumerate(datarefs):
         try:
             my_df = point_source_matches(dataref, ref_cat,
+                                         max_offset=max_offset,
                                          src_columns=src_columns,
                                          flux_type=flux_type)
         except dp.butlerExceptions.NoResults:
@@ -304,7 +305,8 @@ def get_center_radec(butler, visit, opsim_db=None):
 
 def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
                               y_range=(-0.2, 1.2), bins=20,
-                              flux_type='base_PsfFlux', nside=4096):
+                              flux_type='base_PsfFlux', nside=4096,
+                              color='blue'):
     """Plot detection efficiency for stars."""
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
@@ -356,13 +358,13 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     x_vals = (edges[1:] + edges[:-1])/2.
     y_vals = src_count/ref_count
     yerr = np.sqrt(src_count + ref_count)/ref_count
-    plt.errorbar(x_vals, y_vals, yerr=yerr, fmt='.')
+    plt.errorbar(x_vals, y_vals, yerr=yerr, fmt='.', color=color)
     plt.ylim(*y_range)
     plt.xlabel('ref_mag')
-    plt.ylabel('Detection efficiency (stars)')
+    plt.ylabel('Detection efficiency (stars)', color=color)
 
 
-def sfp_validation_plots(args, figsize=(12, 10)):
+def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     butler = dp.Butler(args.repo)
     band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
     center_radec = get_center_radec(butler, args.visit, args.opsim_db)
@@ -373,7 +375,8 @@ def sfp_validation_plots(args, figsize=(12, 10)):
     else:
         pickle_file = args.pickle_file
     if not os.path.isfile(pickle_file):
-        df = visit_ptsrc_matches(butler, args.visit, center_radec)
+        df = visit_ptsrc_matches(butler, args.visit, center_radec,
+                                 max_offset=max_offset)
         df.to_pickle(pickle_file)
     else:
         df = pd.read_pickle(pickle_file)
@@ -386,7 +389,8 @@ def sfp_validation_plots(args, figsize=(12, 10)):
     dra = np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))*3600*1000
     ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
 
-    xy_range = (-100, 100)
+    max_offset *= 1e3*1.2
+    xy_range = (-max_offset, max_offset)
     plt.hexbin(dra, ddec, mincnt=1)
     plt.xlabel('RA offset (mas)')
     plt.ylabel('Dec offset (mas)')
@@ -408,6 +412,10 @@ def sfp_validation_plots(args, figsize=(12, 10)):
     bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
                           density=True, color='red', orientation='horizontal')
     ax_dec.set_xlim(0, 2.3*np.max(bins))
+
+    median_offset = np.median(df['offset'])
+    plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
+                 xycoords='axes fraction', horizontalalignment='left')
 
     plt.title(f'v{args.visit}-{band}')
     plt.colorbar()
@@ -444,7 +452,7 @@ def sfp_validation_plots(args, figsize=(12, 10)):
     plt.title(f'v{args.visit}-{band}')
 
     ax2 = ax1.twinx()
-    ax2.set_ylabel('S/N')
+    ax2.set_ylabel('S/N', color='red')
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
     plot_binned_stats(df['ref_mag'], snr, x_range=x_range, bins=20, color='red')
     plt.xlim(*x_range)
