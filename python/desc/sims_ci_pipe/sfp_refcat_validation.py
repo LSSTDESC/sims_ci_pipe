@@ -17,7 +17,8 @@ from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask
 
 __all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
            'make_depth_map', 'plot_binned_stats', 'get_center_radec',
-           'plot_detection_efficiency', 'get_ref_cat']
+           'plot_detection_efficiency', 'get_ref_cat',
+           'sfp_validation_plots']
 
 
 class RefCat:
@@ -255,15 +256,35 @@ def get_center_radec(butler, visit, opsim_db=None):
         pointing direction is returned.
     """
     if opsim_db is not None:
+        # Get the pointing center from the opsim db file.
         conn = sqlite3.connect(opsim_db)
         df = pd.read_sql('select descDitheredRA, descDitheredDec '
                          'from Summary where '
                          f'obshistid={visit} limit 1', conn)
         return (np.degrees(df.iloc[0].descDitheredRA),
                 np.degrees(df.iloc[0].descDitheredDec))
+
+    # Return the center of R22_S11, if it's available.
     ref_cat = RefCat(butler)
+    datarefs = butler.subset('calexp', visit=visit)
+    dataId = dict()
+    dataId.update(list(datarefs)[0].dataId)
+    dataId['raftName'] = 'R22'
+    dataId['detectorName'] = 'S11'
+    dataId.pop('detector')
+    try:
+        ccd_center = ref_cat.ccd_center(dataId)
+    except dp.butlerExceptions.NoResults as eobj:
+        print(eobj)
+        pass
+    else:
+        return (ccd_center.getLongitude().asDegrees(),
+                ccd_center.getLatitude().asDegrees())
+
+    # R22_S11 isn't available, so loop over all available CCDs and use
+    # the medians in ra, dec of the coordinate centers.
     ras, decs = [], []
-    for dataref in butler.subset('calexp', visit=visit):
+    for dataref in datarefs:
         try:
             ccd_center = ref_cat.ccd_center(dataref.dataId)
         except dp.butlerExceptions.NoResults:
@@ -275,7 +296,8 @@ def get_center_radec(butler, visit, opsim_db=None):
 
 
 def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
-                              bins=20, flux_type='base_PsfFlux', nside=4096):
+                              y_range=(-0.2, 1.2), bins=20,
+                              flux_type='base_PsfFlux', nside=4096):
     """Plot detection efficiency for stars."""
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
@@ -328,5 +350,66 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     y_vals = src_count/ref_count
     yerr = np.sqrt(src_count + ref_count)/ref_count
     plt.errorbar(x_vals, y_vals, yerr=yerr, fmt='.')
+    plt.ylim(*y_range)
     plt.xlabel('ref_mag')
     plt.ylabel('Detection efficiency (stars)')
+
+
+def sfp_validation_plots(args):
+    butler = dp.Butler(args.repo)
+    band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
+    center_radec = get_center_radec(butler, args.visit, args.opsim_db)
+    ref_cat = get_ref_cat(butler, args.visit, center_radec)
+
+    if not os.path.isfile(args.pickle_file):
+        df = visit_ptsrc_matches(butler, args.visit, center_radec)
+        df.to_pickle(args.pickle_file)
+    else:
+        df = pd.read_pickle(args.pickle_file)
+
+    fig = plt.figure(figsize=(16, 16))
+    fig.add_subplot(2, 2, 1)
+    plt.hist(df['offset'], bins=40)
+    plt.xlabel('offset (mas)')
+    plt.title(f'v{args.visit}-{band}')
+
+    fig.add_subplot(2, 2, 2)
+    bins = 20
+    delta_mag = df['src_mag'] - df['ref_mag']
+    dmag_med = np.nanmedian(delta_mag)
+    ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
+    plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
+    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2], bins=20)
+    plt.xlabel('ref_mag')
+    plt.ylabel(f'{args.flux_type}_mag - ref_mag')
+    plt.title(f'v{args.visit}-{band}')
+    plt.ylim(ymin, ymax)
+    xmin, xmax = plt.axis()[:2]
+
+    fig.add_subplot(2, 2, 3)
+    T = (df['base_SdssShape_xx'] + df['base_SdssShape_yy'])*0.2**2
+    tmed = np.nanmedian(T)
+    ymin, ymax = tmed - 0.1, tmed + 0.1
+    plt.hexbin(df['ref_mag'], T, mincnt=1, extent=(xmin, xmax, ymin, ymax))
+    plot_binned_stats(df['ref_mag'], T, x_range=plt.axis()[:2], bins=20)
+    plt.xlabel('ref_mag')
+    plt.ylabel('T (arcsec**2)')
+    plt.ylim(ymin, ymax)
+    plt.title(f'v{args.visit}-{band}')
+
+    ax1 = fig.add_subplot(2, 2, 4)
+    x_range = (12, 25)
+    plot_detection_efficiency(butler, args.visit, df, ref_cat, x_range=x_range)
+    plt.title(f'v{args.visit}-{band}')
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('S/N')
+    snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
+    plot_binned_stats(df['ref_mag'], snr, x_range=x_range, bins=20, color='red')
+
+    plt.yscale('log')
+    plt.ylim(1, plt.axis()[-1])
+    plt.axhline(5, linestyle=':', color='red')
+
+    plt.tight_layout()
+    plt.savefig(args.outfile)
