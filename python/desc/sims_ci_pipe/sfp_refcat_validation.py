@@ -6,6 +6,7 @@ from collections import defaultdict
 import sqlite3
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import NullFormatter
 from scipy.stats import binned_statistic
 import pandas as pd
 import healpy as hp
@@ -135,6 +136,8 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     num_matches = len(matches)
 
     offsets = np.zeros(num_matches, dtype=np.float)
+    ref_ras = np.zeros(num_matches, dtype=np.float)
+    ref_decs = np.zeros(num_matches, dtype=np.float)
     ref_mags = np.zeros(num_matches, dtype=np.float)
     src_mags = np.zeros(num_matches, dtype=np.float)
     ref_data = defaultdict(list)
@@ -143,12 +146,15 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
         ref_mags[i] = match.first[f'lsst_{band}']
+        ref_ras[i] = match.first['coord_ra']
+        ref_decs[i] = match.first['coord_dec']
         src_mags[i] = calib.instFluxToMagnitude(match.second[flux_col])
         for ref_col in ref_columns:
             ref_data[f'ref_{ref_col}'].append(match.first[ref_col])
         for src_col in src_columns:
             src_data[src_col].append(match.second[src_col])
-    data = dict(offset=offsets, ref_mag=ref_mags, src_mag=src_mags)
+    data = dict(offset=offsets, ref_mag=ref_mags, src_mag=src_mags,
+                ref_ra=ref_ras, ref_dec=ref_decs)
     data.update(src_data)
     data.update(ref_data)
     return pd.DataFrame(data=data)
@@ -220,7 +226,7 @@ def make_depth_map(df, nside=128, snr_bounds=None):
     return map_out
 
 
-def plot_binned_stats(x, values, x_range=None, bins=50, fmt='o', color='red'):
+def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
     """
     Plot the median of the values corresponding to the binned x values.
     Errors on the median are derived from the stdev of values.
@@ -234,6 +240,7 @@ def plot_binned_stats(x, values, x_range=None, bins=50, fmt='o', color='red'):
     yerr = binned_values['std']/np.sqrt(binned_values['count'])
     plt.errorbar(x_vals, binned_values['median'], yerr=yerr, fmt=fmt,
                  color=color)
+
 
 def get_center_radec(butler, visit, opsim_db=None):
     """
@@ -355,23 +362,55 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     plt.ylabel('Detection efficiency (stars)')
 
 
-def sfp_validation_plots(args):
+def sfp_validation_plots(args, figsize=(12, 10)):
     butler = dp.Butler(args.repo)
     band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
     center_radec = get_center_radec(butler, args.visit, args.opsim_db)
     ref_cat = get_ref_cat(butler, args.visit, center_radec)
 
-    if not os.path.isfile(args.pickle_file):
-        df = visit_ptsrc_matches(butler, args.visit, center_radec)
-        df.to_pickle(args.pickle_file)
+    if args.pickle_file is None:
+        pickle_file = f'sfp_validation_v{args.visit}-{band}.pkl'
     else:
-        df = pd.read_pickle(args.pickle_file)
+        pickle_file = args.pickle_file
+    if not os.path.isfile(pickle_file):
+        df = visit_ptsrc_matches(butler, args.visit, center_radec)
+        df.to_pickle(pickle_file)
+    else:
+        df = pd.read_pickle(pickle_file)
 
-    fig = plt.figure(figsize=(16, 16))
-    fig.add_subplot(2, 2, 1)
-    plt.hist(df['offset'], bins=40)
-    plt.xlabel('offset (mas)')
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(2, 2, 1)
+
+    coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
+    coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
+    dra = np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))*3600*1000
+    ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
+
+    xy_range = (-100, 100)
+    plt.hexbin(dra, ddec, mincnt=1)
+    plt.xlabel('RA offset (mas)')
+    plt.ylabel('Dec offset (mas)')
+    plt.xlim(*xy_range)
+    plt.ylim(*xy_range)
+
+    nullfmt = NullFormatter()
+
+    ax_ra = ax.twinx()
+    ax_ra.yaxis.set_major_formatter(nullfmt)
+    ax_ra.yaxis.set_ticks([])
+    bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
+                          density=True, color='red')
+    ax_ra.set_ylim(0, 2.3*np.max(bins))
+
+    ax_dec = ax.twiny()
+    ax_dec.xaxis.set_major_formatter(nullfmt)
+    ax_dec.xaxis.set_ticks([])
+    bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
+                          density=True, color='red', orientation='horizontal')
+    ax_dec.set_xlim(0, 2.3*np.max(bins))
+
     plt.title(f'v{args.visit}-{band}')
+    plt.colorbar()
 
     fig.add_subplot(2, 2, 2)
     bins = 20
@@ -382,8 +421,9 @@ def sfp_validation_plots(args):
     plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2], bins=20)
     plt.xlabel('ref_mag')
     plt.ylabel(f'{args.flux_type}_mag - ref_mag')
-    plt.title(f'v{args.visit}-{band}')
     plt.ylim(ymin, ymax)
+    plt.title(f'v{args.visit}-{band}')
+    plt.colorbar()
     xmin, xmax = plt.axis()[:2]
 
     fig.add_subplot(2, 2, 3)
@@ -396,6 +436,7 @@ def sfp_validation_plots(args):
     plt.ylabel('T (arcsec**2)')
     plt.ylim(ymin, ymax)
     plt.title(f'v{args.visit}-{band}')
+    plt.colorbar()
 
     ax1 = fig.add_subplot(2, 2, 4)
     x_range = (12, 25)
@@ -406,10 +447,15 @@ def sfp_validation_plots(args):
     ax2.set_ylabel('S/N')
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
     plot_binned_stats(df['ref_mag'], snr, x_range=x_range, bins=20, color='red')
+    plt.xlim(*x_range)
 
     plt.yscale('log')
     plt.ylim(1, plt.axis()[-1])
     plt.axhline(5, linestyle=':', color='red')
 
     plt.tight_layout()
-    plt.savefig(args.outfile)
+    if args.outfile is None:
+        outfile = f'sfp_validation_v{args.visit}-{band}.png'
+    else:
+        outfile = args.outfile
+    plt.savefig(outfile)
