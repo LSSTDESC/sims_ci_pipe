@@ -364,6 +364,13 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     plt.ylabel('Detection efficiency (stars)', color=color)
 
 
+def get_five_sigma_depth(opsim_db_file, visit):
+    conn = sqlite3.connect(opsim_db_file)
+    query = ('select fiveSigmaDepth from Summary where '
+             f'obsHistID={visit} limit 1')
+    return pd.read_sql(query, conn).iloc[0].fiveSigmaDepth
+
+
 def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     butler = dp.Butler(args.repo)
     band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
@@ -460,6 +467,9 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     plt.yscale('log')
     plt.ylim(1, plt.axis()[-1])
     plt.axhline(5, linestyle=':', color='red')
+    if args.opsim_db is not None:
+        plt.axvline(get_five_sigma_depth(args.opsim_db, args.visit),
+                    linestyle='--', color='red')
 
     plt.tight_layout()
     if args.outfile is None:
