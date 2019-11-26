@@ -6,3 +6,4 @@ try:
 except ImportError as eobj:
     print(eobj)
 from .sfp_refcat_validation import *
+from .ellipticity_distributions import *
