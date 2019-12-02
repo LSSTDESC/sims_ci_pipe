@@ -241,6 +241,7 @@ def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
     yerr = binned_values['std']/np.sqrt(binned_values['count'])
     plt.errorbar(x_vals, binned_values['median'], yerr=yerr, fmt=fmt,
                  color=color)
+    return x_vals, binned_values['median'], yerr
 
 
 def get_center_radec(butler, visit, opsim_db=None):
@@ -371,6 +372,18 @@ def get_five_sigma_depth(opsim_db_file, visit):
     return pd.read_sql(query, conn).iloc[0].fiveSigmaDepth
 
 
+def extrapolate_nsigma(ref_mag, SNR, nsigma=5, npts=3):
+    """
+    Fit a line to log10(SNR) vs ref_mag and extrapolate/interpolate to
+    find the n-sigma magnitude limit.
+    """
+    log10_SNR = np.log10(SNR)
+    index = np.where(log10_SNR == log10_SNR)
+    pars = np.polyfit(log10_SNR[index][-npts:], ref_mag[index][-npts:], 1)
+    mag = np.poly1d(pars)
+    return mag(np.log10(nsigma))
+
+
 def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     butler = dp.Butler(args.repo)
     band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
@@ -454,14 +467,17 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     plt.colorbar()
 
     ax1 = fig.add_subplot(2, 2, 4)
-    x_range = (12, 25)
+    x_range = (12, 26)
     plot_detection_efficiency(butler, args.visit, df, ref_cat, x_range=x_range)
     plt.title(f'v{args.visit}-{band}')
 
     ax2 = ax1.twinx()
     ax2.set_ylabel('S/N', color='red')
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
-    plot_binned_stats(df['ref_mag'], snr, x_range=x_range, bins=20, color='red')
+    ref_mags, SNR_values, yerr = plot_binned_stats(df['ref_mag'], snr,
+                                                   x_range=x_range, bins=20,
+                                                   color='red')
+    m5 = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
     plt.xlim(*x_range)
 
     plt.yscale('log')
@@ -477,3 +493,5 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     else:
         outfile = args.outfile
     plt.savefig(outfile)
+
+    return median_offset, dmag_med, tmed, m5
