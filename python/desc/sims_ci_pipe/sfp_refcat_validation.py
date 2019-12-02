@@ -161,6 +161,10 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
 
 
 def get_ref_cat(butler, visit, center_radec, radius=2.1):
+    """
+    Get the reference catalog for the desired visit for the requested
+    sky location and sky cone radius.
+    """
     ref_cats = RefCat(butler)
     band = list(butler.subset('src', visit=visit))[0].dataId['filter']
     centerCoord = lsst_geom.SpherePoint(center_radec[0]*lsst_geom.degrees,
@@ -366,6 +370,10 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
 
 
 def get_five_sigma_depth(opsim_db_file, visit):
+    """
+    Get the predicted 5-sigma depth for the specified visit from the
+    Opsim sb Summary table.
+    """
     conn = sqlite3.connect(opsim_db_file)
     query = ('select fiveSigmaDepth from Summary where '
              f'obsHistID={visit} limit 1')
@@ -385,6 +393,7 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5, npts=3):
 
 
 def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
+    """Create the single-frame validation plots."""
     butler = dp.Butler(args.repo)
     band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
     center_radec = get_center_radec(butler, args.visit, args.opsim_db)

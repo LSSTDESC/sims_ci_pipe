@@ -1,9 +1,14 @@
+"""
+Module to produce PSF ellipticity plots.
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 import lsst.daf.persistence as dp
-from opsim_db_interface import OpSimDb
+from .opsim_db_interface import OpSimDb
 
-__all__ = ['plot_ellipticities']
+
+__all__ = ['plot_ellipticities', 'ellipticity_distributions']
+
 
 def asymQ(ixx, iyy, ixy):
     asymQx = ixx - iyy
@@ -41,31 +46,73 @@ def get_point_sources(src, flux_type='base_PsfFlux'):
 
 
 def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
-                       seeing_range=(0.6, 0.8), e_range=(0, 0.1), bins=100):
+                       seeing_range=(0.65, 0.75), e_range=(0, 0.1), bins=100):
+    """
+    Plot the ellipticity distributions derived from the stars in the
+    provided visits and compare to the LPM-17 median and 95 percentile
+    design limits.
+
+    Parameters
+    ----------
+    butler: lsst.daf.persistence.Butler
+        Data butler pointing at the repo with the visit data.
+    visits: list-like
+        List of visits to consider.
+    opsim_db_file: str [None]
+        Opsim db file to use to determine if a visit pointing has the
+        required seeing and altitudes.
+    min_altitude: float [80.]
+        Minimum altitude constraint on visit pointing in degrees.
+    seeing_range: (float, float) [(0.65, 0.75)]
+        Range of acceptable seeing values (compared to FWHMtot from
+        Document-20160).
+    e_range: (float, float) [(0, 0.1)]
+        Ellipticity range for plot.
+    bins: int [100]
+        Number of bins for ellipticity histogram.
+    """
     opsim_db = OpSimDb(opsim_db_file)
     ellipticities = []
     for visit in visits:
         row = opsim_db(visit)
-#        if (np.degrees(row.altitude) < min_altitude or
-#            not (seeing_range[0] < row.FWHMgeom < seeing_range[1])):
-#            continue
-        datarefs = butler.subset('src', visit=visit)
+        if (np.degrees(row.altitude) < min_altitude or
+            not (seeing_range[0] < row.FWHMgeom < seeing_range[1])):
+            continue
+        datarefs = butler.subset('src', visit=int(visit))
         for i, dataref in enumerate(datarefs):
             try:
                 src = get_point_sources(dataref.get('src'))
             except dp.butlerExceptions.NoResults:
                 continue
             for record in src:
-                ellipticities.append(get_e(record['base_SdssShape_xx'],
-                                           record['base_SdssShape_yy'],
-                                           record['base_SdssShape_xy']))
-    plt.hist(ellipticities, range=e_range, bins=bins)
+                ellipticities.append(get_e(record['base_SdssShape_psf_xx'],
+                                           record['base_SdssShape_psf_yy'],
+                                           record['base_SdssShape_psf_xy']))
 
-if __name__ == '__main__':
-    plt.ion()
-    opsim_db_file = '/home/DC2/minion_1016_desc_dithered_v4.db'
-    repo = '/home/Run2.2i/image_spot_check/repo/rerun/2019-11-19'
-    butler = dp.Butler(repo)
-    visits = set([_.dataId['visit'] for _ in butler.subset('src', filter='i')])
-    plt.figure()
-    plot_ellipticities(butler, visits, opsim_db_file=opsim_db_file)
+    plt.hist(ellipticities, range=e_range, bins=bins, histtype='step')
+    e_median = np.median(ellipticities)
+    e_95 = np.percentile(ellipticities, 95)
+    xmin, xmax, ymin, ymax = plt.axis()
+    plt.axvline(e_median, linestyle=':', color='red')
+    plt.axvline(0.04, linestyle='--', color='red')
+    plt.axvline(e_95, linestyle=':', color='green')
+    plt.axvline(0.07, linestyle='--', color='green')
+    plt.xlabel(r'$|e| = (1 - q^{2})/(1 + q^{2})$')
+
+
+def ellipticity_distributions(args):
+    """Plot the ellipticity distribuions for r- and i-band."""
+    butler = dp.Butler(args.repo)
+    fig = plt.figure(figsize=(5, 8))
+    for i, band in enumerate(('r', 'i')):
+        fig.add_subplot(2, 1, i+1)
+        visits = set([_.dataId['visit'] for _ in
+                      butler.subset('src', filter=band)])
+        plot_ellipticities(butler, visits, opsim_db_file=args.opsim_db_file)
+        plt.title(f'Run2.2i, {band}-band, {len(visits)} visits')
+    plt.tight_layout()
+    if args.outfile is None:
+        outfile = f'ellipticity_distributions.png'
+    else:
+        outfile = args.outfile
+    plt.savefig(outfile)
