@@ -392,19 +392,20 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5, npts=3):
     return mag(np.log10(nsigma))
 
 
-def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
+def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
+                         flux_type='base_PsfFlux', opsim_db=None,
+                         figsize=(12, 10), max_offset=0.1):
     """Create the single-frame validation plots."""
-    butler = dp.Butler(args.repo)
-    band = list(butler.subset('src', visit=args.visit))[0].dataId['filter']
-    center_radec = get_center_radec(butler, args.visit, args.opsim_db)
-    ref_cat = get_ref_cat(butler, args.visit, center_radec)
+    butler = dp.Butler(repo)
+    band = list(butler.subset('src', visit=visit))[0].dataId['filter']
+    center_radec = get_center_radec(butler, visit, opsim_db)
+    ref_cat = get_ref_cat(butler, visit, center_radec)
 
-    if args.pickle_file is None:
-        pickle_file = f'sfp_validation_v{args.visit}-{band}.pkl'
-    else:
-        pickle_file = args.pickle_file
+    if pickle_file is None:
+        pickle_file = f'sfp_validation_v{visit}-{band}.pkl'
+
     if not os.path.isfile(pickle_file):
-        df = visit_ptsrc_matches(butler, args.visit, center_radec,
+        df = visit_ptsrc_matches(butler, visit, center_radec,
                                  max_offset=max_offset)
         df.to_pickle(pickle_file)
     else:
@@ -446,7 +447,7 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
                  xycoords='axes fraction', horizontalalignment='left')
 
-    plt.title(f'v{args.visit}-{band}')
+    plt.title(f'v{visit}-{band}')
     plt.colorbar()
 
     fig.add_subplot(2, 2, 2)
@@ -457,9 +458,9 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
     plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2], bins=20)
     plt.xlabel('ref_mag')
-    plt.ylabel(f'{args.flux_type}_mag - ref_mag')
+    plt.ylabel(f'{flux_type}_mag - ref_mag')
     plt.ylim(ymin, ymax)
-    plt.title(f'v{args.visit}-{band}')
+    plt.title(f'v{visit}-{band}')
     plt.colorbar()
     xmin, xmax = plt.axis()[:2]
 
@@ -472,13 +473,13 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     plt.xlabel('ref_mag')
     plt.ylabel('T (arcsec**2)')
     plt.ylim(ymin, ymax)
-    plt.title(f'v{args.visit}-{band}')
+    plt.title(f'v{visit}-{band}')
     plt.colorbar()
 
     ax1 = fig.add_subplot(2, 2, 4)
     x_range = (12, 26)
-    plot_detection_efficiency(butler, args.visit, df, ref_cat, x_range=x_range)
-    plt.title(f'v{args.visit}-{band}')
+    plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
+    plt.title(f'v{visit}-{band}')
 
     ax2 = ax1.twinx()
     ax2.set_ylabel('S/N', color='red')
@@ -492,15 +493,15 @@ def sfp_validation_plots(args, figsize=(12, 10), max_offset=0.1):
     plt.yscale('log')
     plt.ylim(1, plt.axis()[-1])
     plt.axhline(5, linestyle=':', color='red')
-    if args.opsim_db is not None:
-        plt.axvline(get_five_sigma_depth(args.opsim_db, args.visit),
+    if opsim_db is not None:
+        plt.axvline(get_five_sigma_depth(opsim_db, visit),
                     linestyle='--', color='red')
 
     plt.tight_layout()
-    if args.outfile is None:
-        outfile = f'sfp_validation_v{args.visit}-{band}.png'
-    else:
-        outfile = args.outfile
+    if outfile is None:
+        outfile = f'sfp_validation_v{visit}-{band}.png'
     plt.savefig(outfile)
 
-    return median_offset, dmag_med, tmed, m5
+    return pd.DataFrame(data=dict(offset=[median_offset],
+                                  dmag_median=[dmag_med],
+                                  T_median=[tmed], m5=[m5]))

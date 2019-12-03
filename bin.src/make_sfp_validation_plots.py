@@ -15,4 +15,6 @@ parser.add_argument('--opsim_db', type=str, default=None,
                     help='opsim db to use for getting visit info')
 args = parser.parse_args()
 
-scp.sfp_validation_plots(args)
+scp.sfp_validation_plots(args.repo, args.visit, pickle_file=args.pickle_file,
+                         outfile=args.outfile, flux_type=args.flux_type,
+                         opsim_db=args.opsim_db)

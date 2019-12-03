@@ -10,4 +10,5 @@ parser.add_argument('--opsim_db', type=str, default=None,
                     help='opsim db to use for getting visit info')
 args = parser.parse_args()
 
-scp.ellipticity_distributions(args)
+scp.ellipticity_distributions(args.repo, outfile=args.outfile,
+                              opsim_db=args.opsim_db)

@@ -100,19 +100,17 @@ def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
     plt.xlabel(r'$|e| = (1 - q^{2})/(1 + q^{2})$')
 
 
-def ellipticity_distributions(args):
+def ellipticity_distributions(repo, outfile=None, opsim_db=None):
     """Plot the ellipticity distribuions for r- and i-band."""
-    butler = dp.Butler(args.repo)
+    butler = dp.Butler(repo)
     fig = plt.figure(figsize=(5, 8))
     for i, band in enumerate(('r', 'i')):
         fig.add_subplot(2, 1, i+1)
         visits = set([_.dataId['visit'] for _ in
                       butler.subset('src', filter=band)])
-        plot_ellipticities(butler, visits, opsim_db_file=args.opsim_db_file)
+        plot_ellipticities(butler, visits, opsim_db_file=opsim_db)
         plt.title(f'Run2.2i, {band}-band, {len(visits)} visits')
     plt.tight_layout()
-    if args.outfile is None:
+    if outfile is None:
         outfile = f'ellipticity_distributions.png'
-    else:
-        outfile = args.outfile
     plt.savefig(outfile)
