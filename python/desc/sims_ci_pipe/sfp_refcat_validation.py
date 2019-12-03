@@ -380,22 +380,59 @@ def get_five_sigma_depth(opsim_db_file, visit):
     return pd.read_sql(query, conn).iloc[0].fiveSigmaDepth
 
 
-def extrapolate_nsigma(ref_mag, SNR, nsigma=5, npts=3):
+def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
     """
     Fit a line to log10(SNR) vs ref_mag and extrapolate/interpolate to
     find the n-sigma magnitude limit.
     """
     log10_SNR = np.log10(SNR)
     index = np.where(log10_SNR == log10_SNR)
-    pars = np.polyfit(log10_SNR[index][-npts:], ref_mag[index][-npts:], 1)
+    pars = np.polyfit(log10_SNR[index], ref_mag[index], 2)
     mag = np.poly1d(pars)
-    return mag(np.log10(nsigma))
+    return mag(np.log10(nsigma)), mag
 
 
 def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
                          flux_type='base_PsfFlux', opsim_db=None,
-                         figsize=(12, 10), max_offset=0.1):
-    """Create the single-frame validation plots."""
+                         figsize=(12, 10), max_offset=0.1, write_metrics=True):
+    """
+    Create the single-frame validation plots.
+
+    Parameters
+    ----------
+    repo: str
+        Data repository containing calexps.
+    visit: int
+        Visit number.
+    pickle_file: str [None]
+        Name of pickle file to contain data for point sources matched to
+        stars in the reference catalog.  If None, then
+        'sfp_validation_v{visit}-{band}.pkl' will be used.
+    outfile: str [None]
+        Name of png file to contain the validation plots.  If None,
+        then 'sfp_validation_v{visit}-{band}.png' will be used.
+    flux_type: str ['base_PsfFlux']
+        Flux column to use for selecting well-measured point sources.
+    opsim_db: str [None]
+        OpSim db file containing pointing information.  This is used
+        to get the pointing direction for the ref cat selection and
+        the predicted five sigma depth for the visit.  If None, then
+        the pointing direction will be inferred from the calexps.
+    figsize: (float, float) [(12, 10)]
+        Size of the figure in inches.
+    max_offset: float [0.1]
+        Maximum offset, in arcsec, for positional matching of point
+        sources to ref cat stars.
+    write_metrics: bool [True]
+        Flag to write a pandas dataframe containing the metrics to
+        a pickle file.
+
+    Returns
+    -------
+        pandas.DataFrame containg the visit-level metrics:
+        (median astrometric offset, median delta magitude, median T value,
+         extrapolated five sigma depth)
+    """
     butler = dp.Butler(repo)
     band = list(butler.subset('src', visit=visit))[0].dataId['filter']
     center_radec = get_center_radec(butler, visit, opsim_db)
