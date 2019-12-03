@@ -1,11 +1,10 @@
+"""
+Module to access an OpSim db file.
+"""
+import os
 import sqlite3
 import numpy as np
 import pandas as pd
-try:
-    import desc.imsim as desc_imsim
-except ImportError as eobj:
-    print(eobj)
-    desc_imsim = None
 
 
 __all__ = ['OpSimDb']
@@ -88,6 +87,8 @@ class OpSimDb:
     def __init__(self, opsim_db_file=None):
         if opsim_db_file is None:
             opsim_db_file = '/global/projecta/projectdirs/lsst/groups/SSim/DC2/minion_1016_desc_dithered_v4.db'
+        if not os.path.isfile(opsim_db_file):
+            raise RuntimeError(f'OpSimDB: {opsim_db_file} does not exist.')
         self.conn = sqlite3.connect(opsim_db_file)
         self.columns = '''obsHistID filter expMJD airmass vSkyBright altitude
                           azimuth dist2Moon rawSeeing fiveSigmaDepth
