@@ -524,12 +524,15 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     ref_mags, SNR_values, yerr = plot_binned_stats(df['ref_mag'], snr,
                                                    x_range=x_range, bins=20,
                                                    color='red')
-    m5 = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
+    m5, mag_func = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
     plt.xlim(*x_range)
 
     plt.yscale('log')
-    plt.ylim(1, plt.axis()[-1])
+    ymin, ymax = 1, plt.axis()[-1]
+    plt.ylim(ymin, ymax)
     plt.axhline(5, linestyle=':', color='red')
+    yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
+    plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
     if opsim_db is not None:
         plt.axvline(get_five_sigma_depth(opsim_db, visit),
                     linestyle='--', color='red')
@@ -539,6 +542,10 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
         outfile = f'sfp_validation_v{visit}-{band}.png'
     plt.savefig(outfile)
 
-    return pd.DataFrame(data=dict(offset=[median_offset],
-                                  dmag_median=[dmag_med],
-                                  T_median=[tmed], m5=[m5]))
+    df = pd.DataFrame(data=dict(visit=[visit], offset=[median_offset],
+                                dmag_median=[dmag_med], T_median=[tmed],
+                                m5=[m5]))
+    if write_metrics:
+        df.to_pickle(f'sfp_metrics_v{visit}-{band}.pkl')
+
+    return df
