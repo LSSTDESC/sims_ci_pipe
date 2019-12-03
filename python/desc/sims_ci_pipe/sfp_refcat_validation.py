@@ -394,7 +394,8 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
 
 def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
                          flux_type='base_PsfFlux', opsim_db=None,
-                         figsize=(12, 10), max_offset=0.1, write_metrics=True):
+                         figsize=(12, 10), max_offset=0.1, write_metrics=True,
+                         metrics_file=None):
     """
     Create the single-frame validation plots.
 
@@ -424,8 +425,11 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
         Maximum offset, in arcsec, for positional matching of point
         sources to ref cat stars.
     write_metrics: bool [True]
-        Flag to write a pandas dataframe containing the metrics to
+        Flag to write a pandas dataframe with the visit-level metrics to
         a pickle file.
+    metrics_file: str [None]
+        Filename for the visit-level metrics file.  If None,
+        then use 'sfp_metrics_v{visit}-{band}.pkl'.
 
     Returns
     -------
@@ -546,6 +550,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
                                 dmag_median=[dmag_med], T_median=[tmed],
                                 m5=[m5]))
     if write_metrics:
-        df.to_pickle(f'sfp_metrics_v{visit}-{band}.pkl')
+        if  metrics_file is None:
+            metrics_file = f'sfp_metrics_v{visit}-{band}.pkl'
+        df.to_pickle(metrics_file)
 
     return df
