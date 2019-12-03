@@ -382,8 +382,8 @@ def get_five_sigma_depth(opsim_db_file, visit):
 
 def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
     """
-    Fit a line to log10(SNR) vs ref_mag and extrapolate/interpolate to
-    find the n-sigma magnitude limit.
+    Fit a parabola to log10(SNR) vs ref_mag and
+    extrapolate/interpolate to find the n-sigma magnitude limit.
     """
     log10_SNR = np.log10(SNR)
     index = np.where(log10_SNR == log10_SNR)
