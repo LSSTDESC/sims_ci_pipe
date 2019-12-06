@@ -7,3 +7,4 @@ except ImportError as eobj:
 from .opsim_db_interface import *
 from .sfp_refcat_validation import *
 from .ellipticity_distributions import *
+from .pipeline_stages import *
