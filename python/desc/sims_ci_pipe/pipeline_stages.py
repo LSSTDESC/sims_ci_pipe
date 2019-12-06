@@ -1,5 +1,5 @@
 """
-Stages for simulation pipeline continuous integration pipeline.
+Stages for continuous integration pipeline.
 """
 import os
 import glob
@@ -92,17 +92,19 @@ class PipelineStage:
             Yaml file containing the pipeline configuration.
         """
         with open(config_file) as fd:
-            self.config = yaml.safe_load(fd)
-        config = self.config['pipeline']
-        self.dry_run = config['dry_run']
+            config = yaml.safe_load(fd)
+        pipe_config = config['pipeline']
+        self.config = config['stages']
+        self.dry_run = pipe_config['dry_run']
         self.run_dir = os.path.join(os.path.abspath('.'),
-                                    f'{config["run_number"]:05d}')
+                                    f'{pipe_config["run_number"]:05d}')
         os.makedirs(self.run_dir, exist_ok=True)
         shutil.copy(config_file,
                     os.path.join(self.run_dir, os.path.basename(config_file)))
-        self.log_dir = os.path.join(self.run_dir, config['log_dir'])
+        self.log_dir = os.path.join(self.run_dir, pipe_config['log_dir'])
         os.makedirs(self.log_dir, exist_ok=True)
-        self.repo_dir = os.path.join(self.run_dir, config['repo_dir'])
+        self.repo_dir = os.path.join(self.run_dir, pipe_config['repo_dir'])
+        self.fits_dir = os.path.join(self.run_dir, pipe_config['fits_dir'])
 
     def execute(self, command, do_raise=False):
         """
@@ -143,8 +145,7 @@ class ImsimStage(PipelineStage):
 
     def run(self):
         """Run method to execute the commands."""
-        config = self.config['stages'][self.stage_name]
-        fits_dir = os.path.join(self.run_dir, config['fits_dir'])
+        config = self.config[self.stage_name]
         psf = config['psf']
         sensors = config['sensors']
         processes = config['processes']
@@ -157,7 +158,7 @@ class ImsimStage(PipelineStage):
         for instcat in instcats:
             visit, band = get_visit_info(instcat)
             visits[band].append(visit)
-            command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {fits_dir} --create_centroid_file --processes {processes} --seed {visit}'
+            command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {self.fits_dir} --create_centroid_file --processes {processes} --seed {visit}'
             if config['disable_sensor_model']:
                 command += ' --disable_sensor_model'
             log_file = os.path.join(self.log_dir, f'imsim_v{visit}-{band}.log')
@@ -184,16 +185,14 @@ class IngestStage(PipelineStage):
             with open(mapper_file, 'w') as output:
                 output.write('lsst.obs.lsst.imsim.ImsimMapper\n')
 
-        config = self.config['stages'][self.stage_name]
+        config = self.config[self.stage_name]
         for target in ('CALIB', 'ref_cats', 'calibrations'):
             src = config[target]
             dest = os.path.join(self.repo_dir, target)
             if not os.path.islink(dest):
                 os.symlink(src, dest)
 
-        fits_dir = os.path.join(self.run_dir,
-                                self.config['stages']['imsim']['fits_dir'])
-        command = f'(time ingestImages.py {self.repo_dir} {fits_dir}/lsst_a*) >& {self.log_dir}/ingest_images.log'
+        command = f'(time ingestImages.py {self.repo_dir} {self.fits_dir}/lsst_a*) >& {self.log_dir}/ingest_images.log'
         self.execute(command)
 
 class ProcessCcdsStage(PipelineStage):
@@ -209,7 +208,7 @@ class ProcessCcdsStage(PipelineStage):
 
     def run(self):
         """Run method to execute the commands."""
-        config = self.config['stages'][self.stage_name]
+        config = self.config[self.stage_name]
         processes = config['processes']
         visits = get_visits(self.repo_dir)
         print(visits)
@@ -231,7 +230,7 @@ class SfpValidationStage(PipelineStage):
 
     def run(self):
         """Run method to execute the commands."""
-        config = self.config['stages'][self.stage_name]
+        config = self.config[self.stage_name]
         opsim_db = config['opsim_db']
         outdir = os.path.join(self.run_dir, config['out_dir'])
         os.makedirs(outdir, exist_ok=True)
