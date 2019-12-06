@@ -1,0 +1,27 @@
+pipeline:
+    run_number: 0
+    log_dir: logging
+    repo_dir: repo
+    dry_run: False
+
+stages:
+    imsim:
+        fits_dir: fits
+        psf: Kolmogorov
+        disable_sensor_model: True
+#        sensors: "R:2,2 S:0,0^R:2,2 S:0,1^R:2,2 S:1,0^R:2,2 S:1,1"
+        sensors: "R:2,2 S:1,1"
+        processes: 1
+        instcat_dir: /home/sims_ci_pipe/work/simulation_pipeline/instcats
+
+    ingest_images:
+        CALIB: /home/Run2.1i/CALIB
+        ref_cats: /home/Run2.1i/ref_cats
+        calibrations: /home/Run2.1i/calibrations
+
+    process_ccds:
+        processes: 32
+
+    sfp_validation:
+        opsim_db: /home/DC2/minion_1016_desc_dithered_v4.db
+        out_dir: sfp_outputs
