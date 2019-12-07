@@ -7,7 +7,8 @@ import lsst.daf.persistence as dp
 from .opsim_db_interface import OpSimDb
 
 
-__all__ = ['plot_ellipticities', 'ellipticity_distributions']
+__all__ = ['get_point_sources', 'plot_ellipticities',
+           'ellipticity_distributions']
 
 
 def asymQ(ixx, iyy, ixy):
