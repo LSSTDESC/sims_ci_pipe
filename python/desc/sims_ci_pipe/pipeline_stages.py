@@ -11,7 +11,7 @@ import pandas as pd
 import lsst.daf.persistence as dp
 
 
-__all__ = ['pipeline_stages']
+__all__ = ['pipeline_stages', 'get_visits', 'merge_metric_files']
 
 
 def get_visit_info(instcat):
@@ -95,6 +95,7 @@ class PipelineStage:
             config = yaml.safe_load(fd)
         pipe_config = config['pipeline']
         self.config = config['stages']
+        self.bands = pipe_config['bands']
         self.dry_run = pipe_config['dry_run']
         self.run_dir = os.path.join(os.path.abspath('.'),
                                     f'{pipe_config["run_number"]:05d}')
@@ -157,6 +158,8 @@ class ImsimStage(PipelineStage):
         visits = defaultdict(list)
         for instcat in instcats:
             visit, band = get_visit_info(instcat)
+            if band not in self.bands:
+                continue
             visits[band].append(visit)
             command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {self.fits_dir} --create_centroid_file --processes {processes} --seed {visit}'
             if config['disable_sensor_model']:
@@ -212,8 +215,10 @@ class ProcessCcdsStage(PipelineStage):
         processes = config['processes']
         visits = get_visits(self.repo_dir)
         print(visits)
-        for visit in visits:
-            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes}) >& {self.log_dir}/processCcd_{visit}.log'
+        for visit, band in visits.items():
+            if band not in self.bands:
+                continue
+            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --no-versions) >& {self.log_dir}/processCcd_{visit}.log'
             self.execute(command)
 
 
@@ -236,13 +241,15 @@ class SfpValidationStage(PipelineStage):
         os.makedirs(outdir, exist_ok=True)
         visits = get_visits(self.repo_dir)
         for visit, band in visits.items():
+            if band not in self.bands:
+                continue
             outfile \
                 = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
             pickle_file \
                 = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.pkl')
             metrics_file \
                 = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
-            command = f'make_sfp_validation_plots.py {self.repo_dir} {visit} --opsim_db {opsim_db} --outfile {outfile} --pickle_file {pickle_file} --metrics_file {metrics_file}'
+            command = f'(time make_sfp_validation_plots.py {self.repo_dir} {visit} --opsim_db {opsim_db} --outfile {outfile} --pickle_file {pickle_file} --metrics_file {metrics_file}) >& {self.log_dir}/sfp_validation_v{visit}-{band}.log'
             self.execute(command)
         if self.dry_run:
             return
