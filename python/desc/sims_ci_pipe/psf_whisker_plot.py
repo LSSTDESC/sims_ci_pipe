@@ -1,11 +1,12 @@
+import itertools
 import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
-import lsst.daf.persistence as dp
+import lsst.geom as lsst_geom
 from .ellipticity_distributions import get_point_sources
 
 
-__all__ = ['get_e_components', 'psf_whisker_plot']
+__all__ = ['get_e_components', 'calexp_psf_whisker_plot', 'psf_whisker_plot']
 
 
 def get_e_components(ixx, iyy, ixy):
@@ -18,22 +19,86 @@ def get_e_components(ixx, iyy, ixy):
     return e1, e2
 
 
-def psf_whisker_plot(repo, visit, grid_shape=(50, 50), figsize=(8, 8)):
+def calexp_psf_whisker_plot(butler, visit, figsize=(8, 8), scale=3,
+                            pixel_coords=None):
+    """
+    Make a psf whisker plot for a specified visit using the
+    PSFs fitted by the LSST Stack.
+
+    Parameters
+    ----------
+    butler: lsst.daf.persistence.Butler
+        Data butler for the repository containing single frame processing
+        src catalogs.
+    visit: int
+        Visit to plot.
+    figsize: (float, float) [(8, 8)]
+        Figure size in inches.
+    scale: float [3]
+        Scale of plotted whiskers.
+    pixel_coords: list [None]
+         List of lsst.geom.Point2D objects containing pixel coordinates
+         on each CCD.   If None, then a 40x40 grid will be used.
+    """
+    if pixel_coords is None:
+        xy_pixels = range(0, 4000, 200)
+        pixel_coords = [lsst_geom.Point2D(*_) for _ in
+                        itertools.product(xy_pixels, xy_pixels)]
+    ras, decs, e1s, e2s = [], [], [], []
+    datarefs = butler.subset('calexp', visit=visit)
+    band = None
+    for dataref in list(datarefs):
+        if band is None:
+            md = dataref.get('calexp_md')
+            band = md.getScalar('FILTER')
+        calexp = dataref.get('calexp')
+        wcs = calexp.getWcs()
+        psf = calexp.getPsf()
+        for pixel_coord in pixel_coords:
+            psf_shape = psf.computeShape(pixel_coord)
+            e1, e2 = get_e_components(psf_shape.getIxx(), psf_shape.getIyy(),
+                                      psf_shape.getIxy())
+            e1s.append(e1)
+            e2s.append(e2)
+            sky_coord = wcs.pixelToSky(pixel_coord)
+            ras.append(sky_coord[0].asDegrees())
+            decs.append(sky_coord[1].asDegrees())
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(1, 1, 1)
+
+    qplot = ax.quiver(ras, decs, e1s, e2s, scale_units='x', angles='xy',
+                      scale=scale, headaxislength=0, headlength=0, headwidth=0)
+    ax.quiverkey(qplot, 0.85, 0.85, 0.03, r'$e = 0.03$', labelpos='E',
+                 coordinates='figure', fontproperties={'size': 14})
+
+    xmean = np.mean(ras)
+    ymean = np.mean(decs)
+    plt.annotate(s='Visit: %d, filter: %s' % (visit, band),
+                 xy=(xmean - 2.0, ymean + 2.5))
+    ax.set_xlabel("RA [deg.]", fontsize=16)
+    ax.set_ylabel("Dec [deg.]", fontsize=16)
+
+
+def psf_whisker_plot(butler, visit, scale=3, grid_shape=(50, 50),
+                     figsize=(8, 8)):
     """
     Make a psf whisker plot for a specified visit.
 
     Parameters
     ----------
-    repo: str
-        Data repository containing single frame processing src catalogs.
+    butler: lsst.daf.persistence.Butler
+        Data butler for the repository containing single frame processing
+        src catalogs.
     visit: int
         Visit to plot.
+    scale: float [3]
+        Scale of plotted whiskers.
     grid_shape: (int, int) [(50, 50)]
         Numbers of bins in x and y over which to average e1 and e2 values.
     figsize: (float, float) [(8, 8)]
         Figure size in inches.
     """
-    butler = dp.Butler(repo)
     datarefs = butler.subset('src', visit=visit)
     band = None
 
@@ -45,9 +110,9 @@ def psf_whisker_plot(repo, visit, grid_shape=(50, 50), figsize=(8, 8)):
         stars = get_point_sources(dataref.get('src'))
         ras.append([record['coord_ra'].asDegrees() for record in stars])
         decs.append([record['coord_dec'].asDegrees() for record in stars])
-        ixx = np.array([record['base_SdssShape_psf_xx'] for record in stars])
-        iyy = np.array([record['base_SdssShape_psf_yy'] for record in stars])
-        ixy = np.array([record['base_SdssShape_psf_xy'] for record in stars])
+        ixx = np.array([record['base_SdssShape_xx'] for record in stars])
+        iyy = np.array([record['base_SdssShape_yy'] for record in stars])
+        ixy = np.array([record['base_SdssShape_xy'] for record in stars])
         e1, e2 = get_e_components(ixx, iyy, ixy)
         e1s.append(e1)
         e2s.append(e2)
@@ -69,7 +134,7 @@ def psf_whisker_plot(repo, visit, grid_shape=(50, 50), figsize=(8, 8)):
     yi = np.linspace(dec.min(), dec.max(), ny)
 
     # an (nx*ny, 2) array of x, y coordinates to interpolate at
-    ipts = np.vstack(a.ravel() for a in np.meshgrid(yi, xi)[::-1]).T
+    ipts = np.vstack([a.ravel() for a in np.meshgrid(yi, xi)[::-1]]).T
 
     # an (nx*ny, 2) array of interpolated u, v values
     ivals = griddata(pts, vals, ipts, method='linear')
@@ -85,7 +150,8 @@ def psf_whisker_plot(repo, visit, grid_shape=(50, 50), figsize=(8, 8)):
 
     Q = ax.quiver(ipts[:,0][mask], ipts[:,1][mask],
                   ui.flatten()[mask], vi.flatten()[mask], scale_units='x',
-                  angles='xy', scale=0.3,
+                  angles='xy',
+                  scale=scale,
                   headaxislength=0, headlength=0, headwidth=0)
 
     ax.quiverkey(Q, 0.85, 0.85, 0.03, r'$e = 0.03$', labelpos='E',
@@ -93,8 +159,6 @@ def psf_whisker_plot(repo, visit, grid_shape=(50, 50), figsize=(8, 8)):
 
     xmean = np.mean(ra)
     ymean = np.mean(dec)
-#    ax.set_xlim(xmean - 3, xmean + 3)
-#    ax.set_ylim(ymean - 3, ymean + 3)
     plt.annotate(s='Visit: %d, filter: %s' % (visit, band),
                  xy=(xmean - 2.0, ymean + 2.5))
     ax.set_xlabel("RA [deg.]", fontsize=16)
