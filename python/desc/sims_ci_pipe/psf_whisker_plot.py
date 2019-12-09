@@ -11,11 +11,10 @@ __all__ = ['get_e_components', 'calexp_psf_whisker_plot', 'psf_whisker_plot']
 
 def get_e_components(ixx, iyy, ixy):
     """
-    Compute ellipticity components from second moments of PSF.
+    Compute ellipticity components from second moments.
     """
-    denominator = ixx**2 + iyy**2
-    e1 = (ixx**2 - iyy**2)/denominator
-    e2 = 2*ixy**2/denominator
+    e1 = (ixx - iyy)/(ixx + iyy)
+    e2 = 2*ixy/(ixx + iyy)
     return e1, e2
 
 
@@ -147,10 +146,8 @@ def psf_whisker_plot(butler, visit, scale=3, grid_shape=(50, 50),
     fig, ax = plt.subplots(1, 1, figsize=figsize)
     plt.axis('equal')
 
-    mask = np.ones(len(ipts[:,0]), dtype=bool)
-
-    Q = ax.quiver(ipts[:,0][mask], ipts[:,1][mask],
-                  ui.flatten()[mask], vi.flatten()[mask], scale_units='x',
+    Q = ax.quiver(ipts[:,0], ipts[:,1],
+                  ui.flatten(), vi.flatten(), scale_units='x',
                   angles='xy',
                   scale=scale,
                   headaxislength=0, headlength=0, headwidth=0)
