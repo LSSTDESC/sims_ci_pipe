@@ -20,7 +20,7 @@ def get_e_components(ixx, iyy, ixy):
 
 
 def calexp_psf_whisker_plot(butler, visit, figsize=(8, 8), scale=3,
-                            pixel_coords=None):
+                            xy_pixels=None):
     """
     Make a psf whisker plot for a specified visit using the
     PSFs fitted by the LSST Stack.
@@ -36,14 +36,15 @@ def calexp_psf_whisker_plot(butler, visit, figsize=(8, 8), scale=3,
         Figure size in inches.
     scale: float [3]
         Scale of plotted whiskers.
-    pixel_coords: list [None]
-         List of lsst.geom.Point2D objects containing pixel coordinates
-         on each CCD.   If None, then a 40x40 grid will be used.
+    xy_pixels: list [None]
+         Pixels in x- and y-directions on each CCD at which to compute
+         the ellipticites.  If None, then `[0, 1000, 2000, 3000]` will be
+         used.
     """
-    if pixel_coords is None:
-        xy_pixels = range(0, 4000, 200)
-        pixel_coords = [lsst_geom.Point2D(*_) for _ in
-                        itertools.product(xy_pixels, xy_pixels)]
+    if xy_pixels is None:
+        xy_pixels = range(0, 4000, 1000)
+    pixel_coords = [lsst_geom.Point2D(*_) for _ in
+                    itertools.product(xy_pixels, xy_pixels)]
     ras, decs, e1s, e2s = [], [], [], []
     datarefs = butler.subset('calexp', visit=visit)
     band = None
