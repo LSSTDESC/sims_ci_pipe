@@ -35,6 +35,23 @@ def get_sky_coords(wcs, pixel_coords):
 
 
 def get_calexp_psf_ellipticity_components(datarefs, pixel_coords):
+    """
+    Get psf ellipticity components for a set of sensor-visit datarefs
+    and pixel coordinates from the  PSF model in the calexps.
+
+    Parameters
+    ----------
+    datarefs: lsst.daf.persistence.butlerSubset.ButlerSubset
+        Data refs to the calexps in the desired visit.
+    pixel_coords: list
+        A list of lsst.geom.Point2D objects that contain the pixel
+        coordinates at which to compute the ellipticity components.
+
+    Returns
+    -------
+    4 lists of ra, dec, e1, and e2 values for plotting using
+     matplotlib.quiver
+    """
     ra_grid, dec_grid, e1_grid, e2_grid = [], [], [], []
     for dataref in list(datarefs):
         calexp = dataref.get('calexp')
@@ -53,12 +70,31 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords):
 
 
 def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords):
+    """
+    Get psf ellipticity components for a set of sensor-visit datarefs
+    and pixel coordinates by interpolating (using scipy.interpolate.griddata)
+    between the calib_psf_used stars for each exposure.
+
+    Parameters
+    ----------
+    datarefs: lsst.daf.persistence.butlerSubset.ButlerSubset
+        Data refs to the calexps in the desired visit.
+    pixel_coords: list
+        A list of lsst.geom.Point2D objects that contain the pixel
+        coordinates at which to compute the ellipticity components.
+
+    Returns
+    -------
+    4 lists of ra, dec, e1, and e2 values for plotting using
+     matplotlib.quiver
+    """
     ras, decs, e1s, e2s = [], [], [], []
     ra_grid, dec_grid = [], []
     for dataref in datarefs:
         ra_ccd_grid, dec_ccd_grid = get_sky_coords(dataref.get('calexp_wcs'),
                                                    pixel_coords)
-        stars = get_point_sources(dataref.get('src'), flags=('calib_psf_used',))
+        stars = get_point_sources(dataref.get('src'),
+                                  flags=('calib_psf_used',))
         ra = [record['coord_ra'].asDegrees() for record in stars]
         dec = [record['coord_dec'].asDegrees() for record in stars]
         ixx = np.array([record['base_SdssShape_xx'] for record in stars])
@@ -120,7 +156,7 @@ def psf_whisker_plot(butler, visit, scale=3, xy_pixels=None, use_calexp=True,
             = get_interpolated_psf_ellipticity_components(datarefs,
                                                           pixel_coords)
 
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    _, ax = plt.subplots(1, 1, figsize=figsize)
     plt.axis('equal')
 
     qplot = ax.quiver(ra, dec, e1, e2, scale_units='x',
