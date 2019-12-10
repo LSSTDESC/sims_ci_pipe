@@ -12,13 +12,10 @@ class sims_ci_pipeTestCase(unittest.TestCase):
         pass
 
     def test_run(self):
-        foo = desc.sims_ci_pipe.sims_ci_pipe(self.message)
-        self.assertEqual(foo.run(), self.message)
+        pass
 
     def test_failure(self):
-        self.assertRaises(TypeError, desc.sims_ci_pipe.sims_ci_pipe)
-        foo = desc.sims_ci_pipe.sims_ci_pipe(self.message)
-        self.assertRaises(RuntimeError, foo.run, True)
+        pass
 
 if __name__ == '__main__':
     unittest.main()
