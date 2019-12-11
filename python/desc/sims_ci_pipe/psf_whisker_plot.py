@@ -12,10 +12,16 @@ from .ellipticity_distributions import get_point_sources
 __all__ = ['get_e_components', 'get_sky_coords', 'psf_whisker_plot']
 
 
-def get_e_components(ixx, iyy, ixy):
+def get_e_components(ixx, iyy, ixy, use_shear_def=False):
     """
     Compute ellipticity components from second moments.
     """
+    if use_shear_def:
+        sq_detQ = np.sqrt(ixx*iyy - ixy**2)
+        e_psf = (ixx - iyy + 2j*ixy)/(ixx + iyy + 2.*sq_detQ)
+        return np.real(e_psf), np.imag(e_psf)
+
+    # Use distortion definition from LSST-SRD, eqs 10-11.
     e1 = (ixx - iyy)/(ixx + iyy)
     e2 = 2*ixy/(ixx + iyy)
     return e1, e2
@@ -34,7 +40,8 @@ def get_sky_coords(wcs, pixel_coords):
     return np.array(ras), np.array(decs)
 
 
-def get_calexp_psf_ellipticity_components(datarefs, pixel_coords):
+def get_calexp_psf_ellipticity_components(datarefs, pixel_coords,
+                                          use_shear_def=False):
     """
     Get psf ellipticity components for a set of sensor-visit datarefs
     and pixel coordinates from the  PSF model in the calexps.
@@ -46,6 +53,8 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords):
     pixel_coords: list
         A list of lsst.geom.Point2D objects that contain the pixel
         coordinates at which to compute the ellipticity components.
+    use_shear_def: bool [False]
+        Use the "shear" definition of the ellipticity components.
 
     Returns
     -------
@@ -60,7 +69,8 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords):
         for pixel_coord in pixel_coords:
             psf_shape = psf.computeShape(pixel_coord)
             e1, e2 = get_e_components(psf_shape.getIxx(), psf_shape.getIyy(),
-                                      psf_shape.getIxy())
+                                      psf_shape.getIxy(),
+                                      use_shear_def=use_shear_def)
             e1_grid.append(e1)
             e2_grid.append(e2)
             sky_coord = wcs.pixelToSky(pixel_coord)
@@ -69,7 +79,9 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords):
     return ra_grid, dec_grid, e1_grid, e2_grid
 
 
-def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords):
+def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords,
+                                                use_shear_def=False,
+                                                min_snr=None):
     """
     Get psf ellipticity components for a set of sensor-visit datarefs
     and pixel coordinates by interpolating (using scipy.interpolate.griddata)
@@ -82,6 +94,11 @@ def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords):
     pixel_coords: list
         A list of lsst.geom.Point2D objects that contain the pixel
         coordinates at which to compute the ellipticity components.
+    use_shear_def: bool [False]
+        Use the "shear" definition of the ellipticity components.
+    min_snr: float [None]
+        Minimum signal-to-noise ratio for calib_psf_used stars.  If None,
+        then don't apply this cut.
 
     Returns
     -------
@@ -94,13 +111,14 @@ def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords):
         ra_ccd_grid, dec_ccd_grid = get_sky_coords(dataref.get('calexp_wcs'),
                                                    pixel_coords)
         stars = get_point_sources(dataref.get('src'),
-                                  flags=('calib_psf_used',))
+                                  flags=('calib_psf_used',),
+                                  min_snr=min_snr)
         ra = [record['coord_ra'].asDegrees() for record in stars]
         dec = [record['coord_dec'].asDegrees() for record in stars]
         ixx = np.array([record['base_SdssShape_xx'] for record in stars])
         iyy = np.array([record['base_SdssShape_yy'] for record in stars])
         ixy = np.array([record['base_SdssShape_xy'] for record in stars])
-        e1, e2 = get_e_components(ixx, iyy, ixy)
+        e1, e2 = get_e_components(ixx, iyy, ixy, use_shear_def=use_shear_def)
 
         ras.extend(ra)
         decs.extend(dec)
@@ -115,7 +133,7 @@ def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords):
 
 
 def psf_whisker_plot(butler, visit, scale=3, xy_pixels=None, use_calexp=True,
-                     figsize=(8, 8)):
+                     use_shear_def=False, min_snr=None, figsize=(8, 8)):
     """
     Make a psf whisker plot for a specified visit using the
     PSFs in the calexps or by interpolating the values using the
@@ -137,6 +155,11 @@ def psf_whisker_plot(butler, visit, scale=3, xy_pixels=None, use_calexp=True,
     use_calexp: bool [True]
          Flag to use the PSF model available from the calexps.  If False,
          then interpolate using the calib_psf_stars.
+    use_shear_def: bool [False]
+        Use the "shear" definition of the ellipticity components.
+    min_snr: float [None]
+        Minimum signal-to-noise ratio for calib_psf_used stars.  If None,
+        then don't apply this cut.
     figsize: (float, float) [(8, 8)]
         Figure size in inches.
     """
@@ -150,11 +173,13 @@ def psf_whisker_plot(butler, visit, scale=3, xy_pixels=None, use_calexp=True,
 
     if use_calexp:
         ra, dec, e1, e2 \
-            = get_calexp_psf_ellipticity_components(datarefs, pixel_coords)
+            = get_calexp_psf_ellipticity_components(datarefs, pixel_coords,
+                                                    use_shear_def=use_shear_def)
     else:
         ra, dec, e1, e2 \
-            = get_interpolated_psf_ellipticity_components(datarefs,
-                                                          pixel_coords)
+            = get_interpolated_psf_ellipticity_components(
+                datarefs, pixel_coords, use_shear_def=use_shear_def,
+                min_snr=min_snr)
 
     _, ax = plt.subplots(1, 1, figsize=figsize)
     plt.axis('equal')

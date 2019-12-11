@@ -35,11 +35,12 @@ def get_e(ixx, iyy, ixy):
     return (a**2 - b**2)/(a**2 + b**2)
 
 
-def get_point_sources(src, flux_type='base_PsfFlux', flags=()):
+def get_point_sources(src, flux_type='base_PsfFlux', min_snr=None, flags=()):
     ext = src.get('base_ClassificationExtendedness_value')
     model_flag = src.get(f'{flux_type}_flag')
     model_flux = src.get(f'{flux_type}_instFlux')
     num_children = src.get('deblend_nChild')
+    snr = model_flux/src.get(f'{flux_type}_instFluxErr')
     condition = ((ext == 0) &
                  (model_flag == False) &
                  (model_flux > 0) &
@@ -47,6 +48,8 @@ def get_point_sources(src, flux_type='base_PsfFlux', flags=()):
     for flag in flags:
         values = src.get(flag)
         condition &= (values == True)
+    if min_snr is not None:
+        condition &= (snr >= min_snr)
     return src.subset(condition)
 
 
