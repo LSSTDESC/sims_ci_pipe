@@ -7,7 +7,8 @@ import lsst.daf.persistence as dp
 from .opsim_db_interface import OpSimDb
 
 
-__all__ = ['plot_ellipticities', 'ellipticity_distributions']
+__all__ = ['get_point_sources', 'plot_ellipticities',
+           'ellipticity_distributions']
 
 
 def asymQ(ixx, iyy, ixy):
@@ -34,15 +35,22 @@ def get_e(ixx, iyy, ixy):
     return (a**2 - b**2)/(a**2 + b**2)
 
 
-def get_point_sources(src, flux_type='base_PsfFlux'):
+def get_point_sources(src, flux_type='base_PsfFlux', min_snr=None, flags=()):
     ext = src.get('base_ClassificationExtendedness_value')
     model_flag = src.get(f'{flux_type}_flag')
     model_flux = src.get(f'{flux_type}_instFlux')
     num_children = src.get('deblend_nChild')
-    return src.subset((ext == 0) &
-                      (model_flag == False) &
-                      (model_flux > 0) &
-                      (num_children == 0))
+    snr = model_flux/src.get(f'{flux_type}_instFluxErr')
+    condition = ((ext == 0) &
+                 (model_flag == False) &
+                 (model_flux > 0) &
+                 (num_children == 0))
+    for flag in flags:
+        values = src.get(flag)
+        condition &= (values == True)
+    if min_snr is not None:
+        condition &= (snr >= min_snr)
+    return src.subset(condition)
 
 
 def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
