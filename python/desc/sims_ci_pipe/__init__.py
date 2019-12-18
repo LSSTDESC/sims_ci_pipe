@@ -9,3 +9,4 @@ from .sfp_refcat_validation import *
 from .ellipticity_distributions import *
 from .psf_whisker_plot import *
 from .pipeline_stages import *
+from .psf_mag_check import *
