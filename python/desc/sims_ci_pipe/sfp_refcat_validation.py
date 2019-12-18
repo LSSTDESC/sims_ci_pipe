@@ -392,10 +392,8 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
     return mag(np.log10(nsigma)), mag
 
 
-def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
-                         flux_type='base_PsfFlux', opsim_db=None,
-                         figsize=(12, 10), max_offset=0.1, write_metrics=True,
-                         metrics_file=None):
+def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
+                         opsim_db=None, figsize=(12, 10), max_offset=0.1):
     """
     Create the single-frame validation plots.
 
@@ -405,13 +403,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
         Data repository containing calexps.
     visit: int
         Visit number.
-    pickle_file: str [None]
-        Name of pickle file to contain data for point sources matched to
-        stars in the reference catalog.  If None, then
-        'sfp_validation_v{visit}-{band}.pkl' will be used.
-    outfile: str [None]
-        Name of png file to contain the validation plots.  If None,
-        then 'sfp_validation_v{visit}-{band}.png' will be used.
+    outdir: str ['.']
+        Directory to contain output files.
     flux_type: str ['base_PsfFlux']
         Flux column to use for selecting well-measured point sources.
     opsim_db: str [None]
@@ -424,16 +417,10 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     max_offset: float [0.1]
         Maximum offset, in arcsec, for positional matching of point
         sources to ref cat stars.
-    write_metrics: bool [True]
-        Flag to write a pandas dataframe with the visit-level metrics to
-        a pickle file.
-    metrics_file: str [None]
-        Filename for the visit-level metrics file.  If None,
-        then use 'sfp_metrics_v{visit}-{band}.pkl'.
 
     Returns
     -------
-        pandas.DataFrame containg the visit-level metrics:
+    pandas.DataFrame containg the visit-level metrics:
         (median astrometric offset, median delta magitude, median T value,
          extrapolated five sigma depth)
     """
@@ -442,8 +429,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     center_radec = get_center_radec(butler, visit, opsim_db)
     ref_cat = get_ref_cat(butler, visit, center_radec)
 
-    if pickle_file is None:
-        pickle_file = f'sfp_validation_v{visit}-{band}.pkl'
+    os.makedirs(outdir, exist_ok=True)
+    pickle_file = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.pkl')
 
     if not os.path.isfile(pickle_file):
         df = visit_ptsrc_matches(butler, visit, center_radec,
@@ -497,7 +484,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     dmag_med = np.nanmedian(delta_mag)
     ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
     plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
-    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2], bins=20)
+    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
+                      bins=20)
     plt.xlabel('ref_mag')
     plt.ylabel(f'{flux_type}_mag - ref_mag')
     plt.ylim(ymin, ymax)
@@ -542,16 +530,13 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
                     linestyle='--', color='red')
 
     plt.tight_layout()
-    if outfile is None:
-        outfile = f'sfp_validation_v{visit}-{band}.png'
+    outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
     plt.savefig(outfile)
 
     df = pd.DataFrame(data=dict(visit=[visit], offset=[median_offset],
                                 dmag_median=[dmag_med], T_median=[tmed],
                                 m5=[m5]))
-    if write_metrics:
-        if  metrics_file is None:
-            metrics_file = f'sfp_metrics_v{visit}-{band}.pkl'
-        df.to_pickle(metrics_file)
+    metrics_file = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
+    df.to_pickle(metrics_file)
 
     return df
