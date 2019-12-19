@@ -132,7 +132,7 @@ def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords,
     return ra_grid, dec_grid, e1_grid, e2_grid
 
 
-def psf_whisker_plot(butler, visit, scale=3, xy_pixels=None, use_calexp=True,
+def psf_whisker_plot(butler, visit, scale=30, xy_pixels=None, use_calexp=True,
                      use_shear_def=False, min_snr=None, figsize=(8, 8)):
     """
     Make a psf whisker plot for a specified visit using the

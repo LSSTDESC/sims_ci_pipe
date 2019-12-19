@@ -14,6 +14,8 @@ import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
 import lsst.daf.persistence as dp
 from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask
+from .psf_mag_check import psf_mag_check
+from .psf_whisker_plot import psf_whisker_plot
 
 
 __all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
@@ -39,6 +41,9 @@ class RefCat:
 
     @property
     def ref_task(self):
+        """
+        Handle for the ReferenceObjectsTask.
+        """
         if self._ref_task is None:
             refConfig = LoadIndexedReferenceObjectsTask.ConfigClass()
             refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
@@ -241,11 +246,12 @@ def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
         binned_values[stat], edges, _ \
             = binned_statistic(x, values, statistic=stat, range=x_range,
                                bins=bins)
-    x_vals = (edges[1:] + edges[:-1])/2.
-    yerr = binned_values['std']/np.sqrt(binned_values['count'])
-    plt.errorbar(x_vals, binned_values['median'], yerr=yerr, fmt=fmt,
-                 color=color)
-    return x_vals, binned_values['median'], yerr
+    index = np.where(binned_values['count'] > 0)
+    x_vals = (edges[1:] + edges[:-1])[index]/2.
+    y_vals = binned_values['median'][index]
+    yerr = binned_values['std'][index]/np.sqrt(binned_values['count'][index])
+    plt.errorbar(x_vals, y_vals, yerr=yerr, fmt=fmt, color=color)
+    return x_vals, y_vals, yerr
 
 
 def get_center_radec(butler, visit, opsim_db=None):
@@ -289,7 +295,6 @@ def get_center_radec(butler, visit, opsim_db=None):
         ccd_center = ref_cat.ccd_center(dataId)
     except dp.butlerExceptions.NoResults as eobj:
         print(eobj)
-        pass
     else:
         return (ccd_center.getLongitude().asDegrees(),
                 ccd_center.getLatitude().asDegrees())
@@ -360,9 +365,10 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     ref_count, edges, _ = binned_statistic(ref_mags, ref_mags,
                                            statistic='count', range=x_range,
                                            bins=bins)
-    x_vals = (edges[1:] + edges[:-1])/2.
-    y_vals = src_count/ref_count
-    yerr = np.sqrt(src_count + ref_count)/ref_count
+    index = np.where(ref_count > 0)
+    x_vals = (edges[1:] + edges[:-1])[index]/2.
+    y_vals = src_count[index]/ref_count[index]
+    yerr = np.sqrt(src_count[index] + ref_count[index])/ref_count[index]
     plt.errorbar(x_vals, y_vals, yerr=yerr, fmt='.', color=color)
     plt.ylim(*y_range)
     plt.xlabel('ref_mag')
@@ -513,9 +519,9 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     ax2 = ax1.twinx()
     ax2.set_ylabel('S/N', color='red')
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
-    ref_mags, SNR_values, yerr = plot_binned_stats(df['ref_mag'], snr,
-                                                   x_range=x_range, bins=20,
-                                                   color='red')
+    ref_mags, SNR_values, _ = plot_binned_stats(df['ref_mag'], snr,
+                                                x_range=x_range, bins=20,
+                                                color='red')
     m5, mag_func = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
     plt.xlim(*x_range)
 
@@ -533,9 +539,21 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
     plt.savefig(outfile)
 
-    df = pd.DataFrame(data=dict(visit=[visit], offset=[median_offset],
-                                dmag_median=[dmag_med], T_median=[tmed],
-                                m5=[m5]))
+    # Make plot of psf_mag - calib_mag distribution.
+    fig = plt.figure(figsize=(6, 4))
+    dmag_calib_median = psf_mag_check(repo, visit)
+    outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+    plt.savefig(outfile)
+
+    # Make psf whisker plot.
+    psf_whisker_plot(butler, visit)
+    outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
+    plt.savefig(outfile)
+
+    df = pd.DataFrame(data=dict(visit=[visit], ast_offset=[median_offset],
+                                dmag_ref_median=[dmag_med],
+                                dmag_calib_median=[dmag_calib_median],
+                                T_median=[tmed], m5=[m5]))
     metrics_file = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
     df.to_pickle(metrics_file)
 
