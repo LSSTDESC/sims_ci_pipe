@@ -14,6 +14,8 @@ import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
 import lsst.daf.persistence as dp
 from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask
+from .psf_mag_check import psf_mag_check
+from .psf_whisker_plot import psf_whisker_plot
 
 
 __all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
@@ -39,6 +41,9 @@ class RefCat:
 
     @property
     def ref_task(self):
+        """
+        Handle for the ReferenceObjectsTask.
+        """
         if self._ref_task is None:
             refConfig = LoadIndexedReferenceObjectsTask.ConfigClass()
             refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
@@ -241,11 +246,12 @@ def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
         binned_values[stat], edges, _ \
             = binned_statistic(x, values, statistic=stat, range=x_range,
                                bins=bins)
-    x_vals = (edges[1:] + edges[:-1])/2.
-    yerr = binned_values['std']/np.sqrt(binned_values['count'])
-    plt.errorbar(x_vals, binned_values['median'], yerr=yerr, fmt=fmt,
-                 color=color)
-    return x_vals, binned_values['median'], yerr
+    index = np.where(binned_values['count'] > 0)
+    x_vals = (edges[1:] + edges[:-1])[index]/2.
+    y_vals = binned_values['median'][index]
+    yerr = binned_values['std'][index]/np.sqrt(binned_values['count'][index])
+    plt.errorbar(x_vals, y_vals, yerr=yerr, fmt=fmt, color=color)
+    return x_vals, y_vals, yerr
 
 
 def get_center_radec(butler, visit, opsim_db=None):
@@ -289,7 +295,6 @@ def get_center_radec(butler, visit, opsim_db=None):
         ccd_center = ref_cat.ccd_center(dataId)
     except dp.butlerExceptions.NoResults as eobj:
         print(eobj)
-        pass
     else:
         return (ccd_center.getLongitude().asDegrees(),
                 ccd_center.getLatitude().asDegrees())
@@ -360,9 +365,10 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     ref_count, edges, _ = binned_statistic(ref_mags, ref_mags,
                                            statistic='count', range=x_range,
                                            bins=bins)
-    x_vals = (edges[1:] + edges[:-1])/2.
-    y_vals = src_count/ref_count
-    yerr = np.sqrt(src_count + ref_count)/ref_count
+    index = np.where(ref_count > 0)
+    x_vals = (edges[1:] + edges[:-1])[index]/2.
+    y_vals = src_count[index]/ref_count[index]
+    yerr = np.sqrt(src_count[index] + ref_count[index])/ref_count[index]
     plt.errorbar(x_vals, y_vals, yerr=yerr, fmt='.', color=color)
     plt.ylim(*y_range)
     plt.xlabel('ref_mag')
@@ -392,10 +398,8 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
     return mag(np.log10(nsigma)), mag
 
 
-def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
-                         flux_type='base_PsfFlux', opsim_db=None,
-                         figsize=(12, 10), max_offset=0.1, write_metrics=True,
-                         metrics_file=None):
+def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
+                         opsim_db=None, figsize=(12, 10), max_offset=0.1):
     """
     Create the single-frame validation plots.
 
@@ -405,13 +409,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
         Data repository containing calexps.
     visit: int
         Visit number.
-    pickle_file: str [None]
-        Name of pickle file to contain data for point sources matched to
-        stars in the reference catalog.  If None, then
-        'sfp_validation_v{visit}-{band}.pkl' will be used.
-    outfile: str [None]
-        Name of png file to contain the validation plots.  If None,
-        then 'sfp_validation_v{visit}-{band}.png' will be used.
+    outdir: str ['.']
+        Directory to contain output files.
     flux_type: str ['base_PsfFlux']
         Flux column to use for selecting well-measured point sources.
     opsim_db: str [None]
@@ -424,16 +423,10 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     max_offset: float [0.1]
         Maximum offset, in arcsec, for positional matching of point
         sources to ref cat stars.
-    write_metrics: bool [True]
-        Flag to write a pandas dataframe with the visit-level metrics to
-        a pickle file.
-    metrics_file: str [None]
-        Filename for the visit-level metrics file.  If None,
-        then use 'sfp_metrics_v{visit}-{band}.pkl'.
 
     Returns
     -------
-        pandas.DataFrame containg the visit-level metrics:
+    pandas.DataFrame containg the visit-level metrics:
         (median astrometric offset, median delta magitude, median T value,
          extrapolated five sigma depth)
     """
@@ -442,8 +435,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     center_radec = get_center_radec(butler, visit, opsim_db)
     ref_cat = get_ref_cat(butler, visit, center_radec)
 
-    if pickle_file is None:
-        pickle_file = f'sfp_validation_v{visit}-{band}.pkl'
+    os.makedirs(outdir, exist_ok=True)
+    pickle_file = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.pkl')
 
     if not os.path.isfile(pickle_file):
         df = visit_ptsrc_matches(butler, visit, center_radec,
@@ -497,7 +490,8 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     dmag_med = np.nanmedian(delta_mag)
     ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
     plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
-    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2], bins=20)
+    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
+                      bins=20)
     plt.xlabel('ref_mag')
     plt.ylabel(f'{flux_type}_mag - ref_mag')
     plt.ylim(ymin, ymax)
@@ -525,9 +519,9 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
     ax2 = ax1.twinx()
     ax2.set_ylabel('S/N', color='red')
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
-    ref_mags, SNR_values, yerr = plot_binned_stats(df['ref_mag'], snr,
-                                                   x_range=x_range, bins=20,
-                                                   color='red')
+    ref_mags, SNR_values, _ = plot_binned_stats(df['ref_mag'], snr,
+                                                x_range=x_range, bins=20,
+                                                color='red')
     m5, mag_func = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
     plt.xlim(*x_range)
 
@@ -542,16 +536,25 @@ def sfp_validation_plots(repo, visit, pickle_file=None, outfile=None,
                     linestyle='--', color='red')
 
     plt.tight_layout()
-    if outfile is None:
-        outfile = f'sfp_validation_v{visit}-{band}.png'
+    outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
     plt.savefig(outfile)
 
-    df = pd.DataFrame(data=dict(visit=[visit], offset=[median_offset],
-                                dmag_median=[dmag_med], T_median=[tmed],
-                                m5=[m5]))
-    if write_metrics:
-        if  metrics_file is None:
-            metrics_file = f'sfp_metrics_v{visit}-{band}.pkl'
-        df.to_pickle(metrics_file)
+    # Make plot of psf_mag - calib_mag distribution.
+    fig = plt.figure(figsize=(6, 4))
+    dmag_calib_median = psf_mag_check(repo, visit)
+    outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+    plt.savefig(outfile)
+
+    # Make psf whisker plot.
+    psf_whisker_plot(butler, visit)
+    outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
+    plt.savefig(outfile)
+
+    df = pd.DataFrame(data=dict(visit=[visit], ast_offset=[median_offset],
+                                dmag_ref_median=[dmag_med],
+                                dmag_calib_median=[dmag_calib_median],
+                                T_median=[tmed], m5=[m5]))
+    metrics_file = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
+    df.to_pickle(metrics_file)
 
     return df

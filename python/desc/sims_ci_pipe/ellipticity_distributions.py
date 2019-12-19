@@ -50,7 +50,7 @@ def get_point_sources(src, flux_type='base_PsfFlux', min_snr=None, flags=()):
         condition &= (values == True)
     if min_snr is not None:
         condition &= (snr >= min_snr)
-    return src.subset(condition)
+    return src.subset(condition).copy(deep=True)
 
 
 def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
