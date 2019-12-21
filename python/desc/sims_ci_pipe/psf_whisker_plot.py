@@ -6,6 +6,7 @@ import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 import lsst.geom as lsst_geom
+import lsst.daf.persistence as dp
 from .ellipticity_distributions import get_point_sources
 
 
@@ -63,7 +64,10 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords,
     """
     ra_grid, dec_grid, e1_grid, e2_grid = [], [], [], []
     for dataref in list(datarefs):
-        calexp = dataref.get('calexp')
+        try:
+            calexp = dataref.get('calexp')
+        except dp.butlerExceptions.NoResults:
+            continue
         wcs = calexp.getWcs()
         psf = calexp.getPsf()
         for pixel_coord in pixel_coords:
@@ -108,11 +112,14 @@ def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords,
     ras, decs, e1s, e2s = [], [], [], []
     ra_grid, dec_grid = [], []
     for dataref in datarefs:
-        ra_ccd_grid, dec_ccd_grid = get_sky_coords(dataref.get('calexp_wcs'),
-                                                   pixel_coords)
-        stars = get_point_sources(dataref.get('src'),
-                                  flags=('calib_psf_used',),
-                                  min_snr=min_snr)
+        try:
+            ra_ccd_grid, dec_ccd_grid \
+                = get_sky_coords(dataref.get('calexp_wcs'), pixel_coords)
+            stars = get_point_sources(dataref.get('src'),
+                                      flags=('calib_psf_used',),
+                                      min_snr=min_snr)
+        except dp.butlerExceptions.NoResults:
+            continue
         ra = [record['coord_ra'].asDegrees() for record in stars]
         dec = [record['coord_dec'].asDegrees() for record in stars]
         ixx = np.array([record['base_SdssShape_xx'] for record in stars])
