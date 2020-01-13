@@ -5,6 +5,7 @@ import itertools
 import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
+import lsst.daf.persistence as dp
 import lsst.geom as lsst_geom
 from .ellipticity_distributions import get_point_sources
 
@@ -63,7 +64,10 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords,
     """
     ra_grid, dec_grid, e1_grid, e2_grid = [], [], [], []
     for dataref in list(datarefs):
-        calexp = dataref.get('calexp')
+        try:
+            calexp = dataref.get('calexp')
+        except dp.butlerExceptions.NoResults:
+            continue
         wcs = calexp.getWcs()
         psf = calexp.getPsf()
         for pixel_coord in pixel_coords:
