@@ -5,6 +5,7 @@ import itertools
 import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
+import lsst.daf.persistence as dp
 import lsst.geom as lsst_geom
 import lsst.daf.persistence as dp
 from .ellipticity_distributions import get_point_sources

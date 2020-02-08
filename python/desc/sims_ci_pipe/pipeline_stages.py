@@ -249,7 +249,7 @@ class SfpValidationStage(PipelineStage):
                 = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.pkl')
             metrics_file \
                 = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
-            command = f'(time make_sfp_validation_plots.py {self.repo_dir} {visit} --opsim_db {opsim_db} --outfile {outfile} --pickle_file {pickle_file} --metrics_file {metrics_file}) >& {self.log_dir}/sfp_validation_v{visit}-{band}.log'
+            command = f'(time make_sfp_validation_plots.py {self.repo_dir} {visit} --opsim_db {opsim_db} --outdir {outdir}) >& {self.log_dir}/sfp_validation_v{visit}-{band}.log'
             self.execute(command)
         if self.dry_run:
             return

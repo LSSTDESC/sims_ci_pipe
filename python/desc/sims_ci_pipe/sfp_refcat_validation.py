@@ -185,7 +185,7 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
     if src_columns is None:
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
-                       'base_PsfFlux_instFlux', 'base_PsfFlux_instFluxErr']
+                       f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
     datarefs = butler.subset('src', visit=visit)
     ref_cat = get_ref_cat(butler, visit, center_radec)
     df = None
@@ -398,8 +398,44 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
     return mag(np.log10(nsigma)), mag
 
 
+def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
+               dmag_range=(-0.05, 0.05)):
+    """
+    Plot delta mag distribution.
+
+    Parameters
+    ----------
+    psf_mags: np.array
+        base_PsfFlux magnitudes.
+    ref_mags: np.array
+        Reference catalog magnitudes.
+    xlabel: str ['psf_mag - ref_mag']
+        Label for x-axis.
+    sn_min: float [150]
+        Signal-to-noise minimum applied to psfFlux/psfFluxErr.
+    dmag_range: (float, float) [(-0.05, 0.05)]
+        Plotting range in magnitudes.
+
+    Returns
+    -------
+    float: median(psf_mags - ref_mags)
+    """
+    delta_mag = psf_mags - ref_mags
+    dmag_median = np.median(delta_mag)
+    plt.hist(delta_mag, range=dmag_range, bins=100, histtype='step',
+             density=True)
+    plt.axvline(0, linestyle=':')
+    plt.axvline(dmag_median, linestyle='--')
+    plt.annotate(f'median: {dmag_median*1000:.2f} mmag\n'
+                 f'psfFlux/psfFluxErr > {sn_min}', (0.05, 0.95),
+                 xycoords='axes fraction', verticalalignment='top')
+    plt.xlabel(xlabel)
+    return dmag_median
+
+
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
-                         opsim_db=None, figsize=(12, 10), max_offset=0.1):
+                         opsim_db=None, figsize=(12, 10), max_offset=0.1,
+                         sn_min=150):
     """
     Create the single-frame validation plots.
 
@@ -423,6 +459,8 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     max_offset: float [0.1]
         Maximum offset, in arcsec, for positional matching of point
         sources to ref cat stars.
+    sn_min: float [150]
+        Mininum signal-to-noise cut on psfFlux/psfFluxErr.
 
     Returns
     -------
@@ -541,8 +579,19 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
 
     # Make plot of psf_mag - calib_mag distribution.
     fig = plt.figure(figsize=(6, 4))
-    dmag_calib_median = psf_mag_check(repo, visit)
+    dmag_calib_median = psf_mag_check(repo, visit, sn_min=sn_min)
+    plt.title(f'v{visit}-{band}')
     outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+    plt.savefig(outfile)
+
+    # Make plot of psf_mag - ref_mag distribution.
+    my_df = df.query('base_PsfFlux_instFlux/base_PsfFlux_instFluxErr'
+                     f' > {sn_min}')
+    fig = plt.figure(figsize=(6, 4))
+    dmag_ref_median = plot_dmags(my_df['src_mag'], my_df['ref_mag'],
+                                 sn_min=sn_min)
+    plt.title(f'v{visit}-{band}')
+    outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
     plt.savefig(outfile)
 
     # Make psf whisker plot.
@@ -551,9 +600,9 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     plt.savefig(outfile)
 
     df = pd.DataFrame(data=dict(visit=[visit], ast_offset=[median_offset],
-                                dmag_ref_median=[dmag_med],
+                                dmag_ref_median=[dmag_ref_median],
                                 dmag_calib_median=[dmag_calib_median],
-                                T_median=[tmed], m5=[m5]))
+                                T_median=[tmed], m5=[m5], band=[band]))
     metrics_file = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
     df.to_pickle(metrics_file)
 
