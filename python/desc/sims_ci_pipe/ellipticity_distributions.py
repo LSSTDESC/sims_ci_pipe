@@ -68,7 +68,8 @@ def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
         List of visits to consider.
     opsim_db_file: str [None]
         Opsim db file to use to determine if a visit pointing has the
-        required seeing and altitudes.
+        required seeing and altitudes.  If None, then the visits will
+        processed without filtering on those requirements.
     min_altitude: float [80.]
         Minimum altitude constraint on visit pointing in degrees.
     seeing_range: (float, float) [(0.65, 0.75)]
@@ -79,13 +80,15 @@ def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
     bins: int [100]
         Number of bins for ellipticity histogram.
     """
-    opsim_db = OpSimDb(opsim_db_file)
+    if opsim_db_file is not None:
+        opsim_db = OpSimDb(opsim_db_file)
     ellipticities = []
     for visit in visits:
-        row = opsim_db(visit)
-        if (np.degrees(row.altitude) < min_altitude or
-            not (seeing_range[0] < row.FWHMgeom < seeing_range[1])):
-            continue
+        if opsim_db_file is not None:
+            row = opsim_db(visit)
+            if (np.degrees(row.altitude) < min_altitude or
+                not (seeing_range[0] < row.FWHMgeom < seeing_range[1])):
+                continue
         datarefs = butler.subset('src', visit=int(visit))
         for i, dataref in enumerate(datarefs):
             try:
@@ -105,20 +108,32 @@ def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
     plt.axvline(0.04, linestyle='--', color='red')
     plt.axvline(e_95, linestyle=':', color='green')
     plt.axvline(0.07, linestyle='--', color='green')
+    plt.annotate(f'median: {e_median:.1e}', (0.6, 0.95),
+                 xycoords='axes fraction')
+    plt.annotate(f'95th percentile: {e_95:.1e}', (0.6, 0.9),
+                 xycoords='axes fraction')
     plt.xlabel(r'$|e| = (1 - q^{2})/(1 + q^{2})$')
 
 
-def ellipticity_distributions(repo, outfile=None, opsim_db=None):
-    """Plot the ellipticity distribuions for r- and i-band."""
+def ellipticity_distributions(repo, visit=None, outfile=None, opsim_db=None,
+                              figsize=(5, 8)):
+    """Plot the ellipticity distributions for r- and i-band."""
     butler = dp.Butler(repo)
-    fig = plt.figure(figsize=(5, 8))
-    for i, band in enumerate(('r', 'i')):
-        fig.add_subplot(2, 1, i+1)
-        visits = set([_.dataId['visit'] for _ in
-                      butler.subset('src', filter=band)])
-        plot_ellipticities(butler, visits, opsim_db_file=opsim_db)
-        plt.title(f'Run2.2i, {band}-band, {len(visits)} visits')
-    plt.tight_layout()
+    fig = plt.figure(figsize=figsize)
+    if visit is not None:
+        # Explicitly set opsim_db_file to None to avoid selection on
+        # altitude and seeing.
+        plot_ellipticities(butler, [visit], opsim_db_file=None)
+        band = list(butler.subset('calexp', visit=visit))[0].dataId['filter']
+        plt.title(f'Run2.2i, {band}-band, visit {visit}')
+    else:
+        for i, band in enumerate(('r', 'i')):
+            fig.add_subplot(2, 1, i+1)
+            visits = set([_.dataId['visit'] for _ in
+                          butler.subset('src', filter=band)])
+            plot_ellipticities(butler, visits, opsim_db_file=opsim_db)
+            plt.title(f'Run2.2i, {band}-band, {len(visits)} visits')
+        plt.tight_layout()
     if outfile is None:
         outfile = f'ellipticity_distributions.png'
     plt.savefig(outfile)
