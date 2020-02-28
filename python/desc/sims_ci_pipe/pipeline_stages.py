@@ -151,7 +151,10 @@ class ImsimStage(PipelineStage):
         sensors = config['sensors']
         processes = config['processes']
         instcat_dir = config['instcat_dir']
-        config_file = config['config_file']
+        try:
+            config_file = config['config_file']
+        except KeyError:
+            config_file = None
         if instcat_dir == 'default':
             instcat_dir = os.path.join(os.environ['SIMS_CI_PIPE_DIR'],
                                        'data', 'instcats')
@@ -214,12 +217,16 @@ class ProcessCcdsStage(PipelineStage):
         """Run method to execute the commands."""
         config = self.config[self.stage_name]
         processes = config['processes']
+        try:
+            options = config['options']
+        except KeyError:
+            options = ''
         visits = get_visits(self.repo_dir)
         print(visits)
         for visit, band in visits.items():
             if band not in self.bands:
                 continue
-            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --longlog) >& {self.log_dir}/processCcd_{visit}.log'
+            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --longlog {options}) >& {self.log_dir}/processCcd_{visit}.log'
             self.execute(command)
 
 
