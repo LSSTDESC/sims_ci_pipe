@@ -219,7 +219,7 @@ class ProcessCcdsStage(PipelineStage):
         for visit, band in visits.items():
             if band not in self.bands:
                 continue
-            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --no-versions) >& {self.log_dir}/processCcd_{visit}.log'
+            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --longlog) >& {self.log_dir}/processCcd_{visit}.log'
             self.execute(command)
 
 
