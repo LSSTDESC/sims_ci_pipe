@@ -111,7 +111,7 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
 
 def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                            y_pixels=None, mag_range=(16.3, 21),
-                           max_xy_offset=0):
+                           max_x_offset=0, max_y_offset=0, outdir=None):
     """
     Create an instance catalog consisting of grids of stars on each
     chip, using the instance catalog from a simulated visit to provide
@@ -131,12 +131,21 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
         then use np.linspace(100, 3900, 39).
     mag_range: tuple [(16.3, 21)]
         Range of mag_norm values to sample from the input star_cat file.
-    max_xy_offset: float [0]
-        Maximum offset in pixels to be drawn in both x- and
-        y-directions to displace each star from its nominal grid
-        position.  These offsets helps prevent failures in the
-        astrometric solution that arises from trying to match to a
-        regular grid of reference stars.
+    max_x_offset: float [0]
+        Maximum offset in pixels to be drawn in the x-direction to
+        displace each star from its nominal grid position.  These
+        offsets helps prevent failures in the astrometric solution
+        that arises from trying to match to a regular grid of
+        reference stars.
+    max_y_offset: float [0]
+        Maximum offset in pixels to be drawn in the y-direction to
+        displace each star from its nominal grid position.  These
+        offsets helps prevent failures in the astrometric solution
+        that arises from trying to match to a regular grid of
+        reference stars.
+    outdir: str [None]
+        Output directory for instance catalog files.  If None, then use
+        f'v{visit}-{band}_grid'.
 
     Returns
     -------
@@ -159,24 +168,32 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
     mags = shuffled_mags(star_cat, mag_range=mag_range)[:num_stars]
     mags.sort()
 
-    outdir = 'v{visit}-{band}_grid'.format(**locals())
+    if outdir is None:
+        outdir = f'v{visit}-{band}_grid'
     os.makedirs(outdir, exist_ok=True)
 
     star_grid_cat = 'star_grid_{visit}.txt'.format(**locals())
     phosim_cat_file = write_phosim_cat(instcat, outdir, star_grid_cat)
 
     outfile = os.path.join(outdir, star_grid_cat)
+    y_step = y_pixels[1] - y_pixels[0]
     with open(outfile, 'w') as output:
         my_id = 0
         for detector in detectors:
             print("processing", detector)
             wcs = tanSipWcsFromDetector(det_name[detector], camera_wrapper,
                                         obs_md, epoch=2000.)
-            for x_pix in x_pixels:
+            for ix, x_pix in enumerate(x_pixels):
+                y_offset = 0
+                if ix % 2 == 0:
+                    # Stagger this column by half a step in y.
+                    y_offset = y_step/2.
                 for y_pix in y_pixels:
-                    dx, dy = np.random.uniform(high=max_xy_offset, size=2)
+                    dx = np.random.uniform(high=max_x_offset)
+                    dy = np.random.uniform(high=max_y_offset)
                     ra, dec = [_.asDegrees() for _ in
-                               wcs.pixelToSky(x_pix + dx, y_pix + dy)]
+                               wcs.pixelToSky(x_pix + dx,
+                                              y_pix + dy + y_offset)]
                     mag = mags[my_id % num_stars]
                     output.write(template.format(**locals()))
                     my_id += 1
