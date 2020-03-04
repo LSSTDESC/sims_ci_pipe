@@ -111,7 +111,8 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
 
 def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                            y_pixels=None, mag_range=(16.3, 21),
-                           max_x_offset=0, max_y_offset=0, outdir=None):
+                           max_x_offset=0, max_y_offset=0,
+                           y_stagger=4, outdir=None, sorted_mags=False):
     """
     Create an instance catalog consisting of grids of stars on each
     chip, using the instance catalog from a simulated visit to provide
@@ -143,9 +144,14 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
         offsets helps prevent failures in the astrometric solution
         that arises from trying to match to a regular grid of
         reference stars.
+    y_stagger: int [4]
+        Stagger rows by y_step/y_stagger*(ix % ystagger)
     outdir: str [None]
         Output directory for instance catalog files.  If None, then use
         f'v{visit}-{band}_grid'.
+    sorted_mags: bool [False]
+        Flag to sort magnitudes so that brightest objects are at the bottom
+        of the CCD.
 
     Returns
     -------
@@ -166,7 +172,8 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
 
     num_stars = len(x_pixels)*len(y_pixels)
     mags = shuffled_mags(star_cat, mag_range=mag_range)[:num_stars]
-    mags.sort()
+    if sorted_mags:
+        mags.sort()
 
     if outdir is None:
         outdir = f'v{visit}-{band}_grid'
@@ -183,11 +190,12 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
             print("processing", detector)
             wcs = tanSipWcsFromDetector(det_name[detector], camera_wrapper,
                                         obs_md, epoch=2000.)
+            if not sorted_mags:
+                # Re-shuffle the magnitudes for each CCD.
+                np.random.shuffle(mags)
             for ix, x_pix in enumerate(x_pixels):
-                y_offset = 0
-                if ix % 2 == 0:
-                    # Stagger this column by half a step in y.
-                    y_offset = y_step/2.
+                # Stagger rows by quarter steps
+                y_offset = y_step/y_stagger*(ix % y_stagger)
                 for y_pix in y_pixels:
                     dx = np.random.uniform(high=max_x_offset)
                     dy = np.random.uniform(high=max_y_offset)
