@@ -1,9 +1,11 @@
 """
 Module to create an instance catalog of stars on a grid with a range of
-mag_norm values derived from a simulated visit.
+magnitude values derived from a simulated visit.
 """
 import os
 from collections import OrderedDict
+import sqlite3
+import pandas as pd
 import numpy as np
 import lsst.utils
 from lsst.sims.photUtils import BandpassDict
@@ -13,7 +15,8 @@ import lsst.obs.lsst as obs_lsst
 import desc.imsim
 
 
-__all__ = ['make_star_grid_instcat', 'make_reference_catalog']
+__all__ = ['make_star_grid_instcat', 'make_reference_catalog',
+           'shuffled_objects']
 
 
 camera = obs_lsst.imsim.ImsimMapper().camera
@@ -25,31 +28,61 @@ for i, det in enumerate(camera):
 camera_wrapper = LSSTCameraWrapper()
 
 
-def shuffled_mags(star_cat, mag_range=(16.3, 21)):
+def shuffled_objects(star_cat, band, star_truth_db=None, mag_range=(16.3, 21)):
     """
-    Extract the mag_norm values from star_cat and shuffle them
-    so that they can be sampled without replacement.
+    Extract the object entries in the specified magnitude range and
+    shuffle them so that they can be sampled without replacement.
 
     Parameters
     ----------
     star_cat: str
         phosim-style instance catalog of stars.
+    band: str
+        Passband to use for selecting magnitudes if star_truth_db file is
+        provided.  Should be in 'ugrizy'.
+    star_truth_db: str [None]
+        sqlite3 file containing the truth_summary table for stars.  If None,
+        then make selection using mag_norm.
     mag_range: tuple [(16.3, 21)]
-        Selection range of mag_norm values.
+        Selection range of magnitude values.
 
     Returns
     -------
-    np.array of mag_norm values.
+    np.array of object entries lines.
     """
-    mags = []
+    ids = []
     with desc.imsim.fopen(star_cat, mode='rt') as fd:
         for line in fd:
             tokens = line.split()
-            mag = float(tokens[4])
-            if mag_range[0] < mag < mag_range[1]:
-                mags.append(mag)
-    np.random.shuffle(mags)
-    return np.array(mags)
+            ids.append(str(int(tokens[1])//1024))
+    id_list = '(' + ','.join(ids) + ')'
+
+    if star_truth_db is not None:
+        flux_min = 10.**((8.9 - mag_range[1])/2.5)*1e9
+        flux_max = 10.**((8.9 - mag_range[0])/2.5)*1e9
+        query = f'''select id from truth_summary where
+                    {flux_min} < flux_{band} and
+                    flux_{band} < {flux_max} and
+                    id in {id_list}'''
+        with sqlite3.connect(star_truth_db) as conn:
+            df = pd.read_sql(query, conn)
+        selected_ids = set(df['id'])
+
+    lines = []
+    with desc.imsim.fopen(star_cat, mode='rt') as fd:
+        for line in fd:
+            tokens = line.strip().split()
+            if star_truth_db is not None:
+                obj_id = str(int(line.strip().split()[1])//1024)
+                if obj_id in selected_ids:
+                    lines.append(line.strip())
+            else:
+                mag_norm = float(tokens[4])
+                if mag_range[0] < mag_norm < mag_range[1]:
+                    lines.append(line.strip())
+
+    np.random.shuffle(lines)
+    return np.array(lines)
 
 
 def parse_instcat(instcat):
@@ -109,8 +142,8 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
     return os.path.abspath(outfile)
 
 
-def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
-                           y_pixels=None, mag_range=(16.3, 21),
+def make_star_grid_instcat(instcat, star_truth_db=None, detectors=None,
+                           x_pixels=None, y_pixels=None, mag_range=(16.3, 21),
                            max_x_offset=0, max_y_offset=0,
                            y_stagger=4, outdir=None, sorted_mags=False):
     """
@@ -122,6 +155,10 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
     ----------
     instcat: str
         The instance catalog corresponding to the desired visit.
+    star_truth_db: str [None]
+        sqlite3 file containing the truth_summary table for stars so that
+        the true band-specific magnitudes can be used for selection.
+        If None, then make selection using the mag_norm value.
     detectors: sequence of ints [None]
         The detectors to process. If None, then use range(189).
     x_pixels: sequence of ints [None]
@@ -131,7 +168,7 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
         The pixel coordinates in the y (i.e., parallel)-direction. If None,
         then use np.linspace(100, 3900, 39).
     mag_range: tuple [(16.3, 21)]
-        Range of mag_norm values to sample from the input star_cat file.
+        Range of magnituide values to sample from the input star_cat file.
     max_x_offset: float [0]
         Maximum offset in pixels to be drawn in the x-direction to
         displace each star from its nominal grid position.  These
@@ -164,16 +201,16 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
     if y_pixels is None:
         y_pixels = np.linspace(200, 3800, 36)
 
-    template = "object {my_id} {ra:.15f} {dec:.15f} {mag:.8f} starSED/phoSimMLT/lte037-5.5-1.0a+0.4.BT-Settl.spec.gz 0 0 0 0 0 0 point none CCM 0.04056722 3.1\n"
-
     star_cat, visit, band = parse_instcat(instcat)
     obs_md \
         = desc.imsim.phosim_obs_metadata(desc.imsim.metadata_from_file(instcat))
 
-    num_stars = len(x_pixels)*len(y_pixels)
-    mags = shuffled_mags(star_cat, mag_range=mag_range)[:num_stars]
+    num_stars = len(detectors)*len(x_pixels)*len(y_pixels)
+    stars = shuffled_objects(star_cat, band, star_truth_db=star_truth_db,
+                             mag_range=mag_range)[:num_stars]
+    num_stars = min(num_stars, len(stars))
     if sorted_mags:
-        mags.sort()
+        stars.sort()
 
     if outdir is None:
         outdir = f'v{visit}-{band}_grid'
@@ -191,8 +228,8 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
             wcs = tanSipWcsFromDetector(det_name[detector], camera_wrapper,
                                         obs_md, epoch=2000.)
             if not sorted_mags:
-                # Re-shuffle the magnitudes for each CCD.
-                np.random.shuffle(mags)
+                # Re-shuffle the entries for each CCD.
+                np.random.shuffle(stars)
             for ix, x_pix in enumerate(x_pixels):
                 # Stagger rows by quarter steps
                 y_offset = y_step/y_stagger*(ix % y_stagger)
@@ -202,8 +239,13 @@ def make_star_grid_instcat(instcat, detectors=None, x_pixels=None,
                     ra, dec = [_.asDegrees() for _ in
                                wcs.pixelToSky(x_pix + dx,
                                               y_pix + dy + y_offset)]
-                    mag = mags[my_id % num_stars]
-                    output.write(template.format(**locals()))
+                    tokens = stars[my_id % num_stars].split()
+                    # Replace the uniqueID, ra, dec fields with the
+                    # recomputed values.
+                    tokens[1] = str(my_id)
+                    tokens[2] = f'{ra:.15f}'
+                    tokens[3] = f'{dec:.15f}'
+                    output.write(' '.join(tokens) + '\n')
                     my_id += 1
     return phosim_cat_file
 
