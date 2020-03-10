@@ -151,6 +151,10 @@ class ImsimStage(PipelineStage):
         sensors = config['sensors']
         processes = config['processes']
         instcat_dir = config['instcat_dir']
+        try:
+            config_file = config['config_file']
+        except KeyError:
+            config_file = None
         if instcat_dir == 'default':
             instcat_dir = os.path.join(os.environ['SIMS_CI_PIPE_DIR'],
                                        'data', 'instcats')
@@ -161,7 +165,7 @@ class ImsimStage(PipelineStage):
             if band not in self.bands:
                 continue
             visits[band].append(visit)
-            command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {self.fits_dir} --create_centroid_file --processes {processes} --seed {visit}'
+            command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {self.fits_dir} --create_centroid_file --config_file {config_file} --processes {processes} --seed {visit}'
             if config['disable_sensor_model']:
                 command += ' --disable_sensor_model'
             log_file = os.path.join(self.log_dir, f'imsim_v{visit}-{band}.log')
@@ -213,12 +217,16 @@ class ProcessCcdsStage(PipelineStage):
         """Run method to execute the commands."""
         config = self.config[self.stage_name]
         processes = config['processes']
+        try:
+            options = config['options']
+        except KeyError:
+            options = ''
         visits = get_visits(self.repo_dir)
         print(visits)
         for visit, band in visits.items():
             if band not in self.bands:
                 continue
-            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --no-versions) >& {self.log_dir}/processCcd_{visit}.log'
+            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --longlog {options}) >& {self.log_dir}/processCcd_{visit}.log'
             self.execute(command)
 
 
