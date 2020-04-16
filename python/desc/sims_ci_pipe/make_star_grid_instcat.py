@@ -85,7 +85,7 @@ def shuffled_objects(star_cat, band, star_truth_db=None, mag_range=(16.3, 21)):
     return np.array(lines)
 
 
-def parse_instcat(instcat):
+def parse_instcat(instcat, prefix='star_'):
     """
     Parse the phosim_cat_*.txt instance catalog and return the
     star catalog filename, assuming it starts with `star_`, the visit,
@@ -105,7 +105,7 @@ def parse_instcat(instcat):
         for line in fd:
             if line.startswith('includeobj'):
                 cat_name = line.strip().split()[-1]
-                if cat_name.startswith('star_'):
+                if cat_name.startswith(prefix):
                     star_cat = cat_name
             if line.startswith('obshistid'):
                 visit = int(line.strip().split()[-1])
@@ -145,7 +145,8 @@ def write_phosim_cat(instcat, outdir, star_grid_cat):
 def make_star_grid_instcat(instcat, star_truth_db=None, detectors=None,
                            x_pixels=None, y_pixels=None, mag_range=(16.3, 21),
                            max_x_offset=0, max_y_offset=0,
-                           y_stagger=4, outdir=None, sorted_mags=False):
+                           y_stagger=4, outdir=None, sorted_mags=False, prefix='star_',
+                           shuffle=True):
     """
     Create an instance catalog consisting of grids of stars on each
     chip, using the instance catalog from a simulated visit to provide
@@ -201,13 +202,17 @@ def make_star_grid_instcat(instcat, star_truth_db=None, detectors=None,
     if y_pixels is None:
         y_pixels = np.linspace(200, 3800, 36)
 
-    star_cat, visit, band = parse_instcat(instcat)
+    star_cat, visit, band = parse_instcat(instcat, prefix=prefix)
     obs_md \
         = desc.imsim.phosim_obs_metadata(desc.imsim.metadata_from_file(instcat))
 
     num_stars = len(detectors)*len(x_pixels)*len(y_pixels)
-    stars = shuffled_objects(star_cat, band, star_truth_db=star_truth_db,
-                             mag_range=mag_range)[:num_stars]
+    if shuffle:
+        stars = shuffled_objects(star_cat, band, star_truth_db=star_truth_db,
+                                 mag_range=mag_range)[:num_stars]
+    else:
+        with desc.imsim.fopen(star_cat, mode='rt') as fd:
+            stars = np.array([_.strip() for _ in fd])
     num_stars = min(num_stars, len(stars))
     if sorted_mags:
         stars.sort()
@@ -216,7 +221,7 @@ def make_star_grid_instcat(instcat, star_truth_db=None, detectors=None,
         outdir = f'v{visit}-{band}_grid'
     os.makedirs(outdir, exist_ok=True)
 
-    star_grid_cat = 'star_grid_{visit}.txt'.format(**locals())
+    star_grid_cat = '{prefix}grid_{visit}.txt'.format(**locals())
     phosim_cat_file = write_phosim_cat(instcat, outdir, star_grid_cat)
 
     outfile = os.path.join(outdir, star_grid_cat)
@@ -227,7 +232,7 @@ def make_star_grid_instcat(instcat, star_truth_db=None, detectors=None,
             print("processing", detector)
             wcs = tanSipWcsFromDetector(det_name[detector], camera_wrapper,
                                         obs_md, epoch=2000.)
-            if not sorted_mags:
+            if not sorted_mags and shuffle:
                 # Re-shuffle the entries for each CCD.
                 np.random.shuffle(stars)
             for ix, x_pix in enumerate(x_pixels):
