@@ -123,11 +123,12 @@ class PipelineStage:
         if self.dry_run:
             return
         try:
-            subprocess.check_call(command, shell=True)
+            retcode = subprocess.check_call(command, shell=True)
         except subprocess.CalledProcessError as eobj:
             if do_raise:
                 raise eobj
-
+            retcode = 'CalledProcessError'
+        print('retcode:', retcode)
 
 class ImsimStage(PipelineStage):
     """
