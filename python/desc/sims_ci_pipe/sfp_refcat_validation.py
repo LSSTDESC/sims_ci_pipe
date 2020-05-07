@@ -171,7 +171,10 @@ def get_ref_cat(butler, visit, center_radec, radius=2.1):
     sky location and sky cone radius.
     """
     ref_cats = RefCat(butler)
-    band = list(butler.subset('src', visit=visit))[0].dataId['filter']
+    try:
+        band = list(butler.subset('src', visit=visit))[0].dataId['filter']
+    except dp.butlerExceptions.NoResults:
+        band = list(butler.subset('src', expId=visit))[0].dataId['filter']
     centerCoord = lsst_geom.SpherePoint(center_radec[0]*lsst_geom.degrees,
                                         center_radec[1]*lsst_geom.degrees)
     return ref_cats(centerCoord, band, radius)
@@ -186,7 +189,10 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
                        f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
-    datarefs = butler.subset('src', visit=visit)
+    try:
+        datarefs = butler.subset('src', visit=visit)
+    except dp.butlerExceptions.NoResults:
+        datarefs = butler.subset('src', expId=visit)
     ref_cat = get_ref_cat(butler, visit, center_radec)
     df = None
     for i, dataref in enumerate(datarefs):
@@ -285,7 +291,10 @@ def get_center_radec(butler, visit, opsim_db=None):
 
     # Return the center of R22_S11, if it's available.
     ref_cat = RefCat(butler)
-    datarefs = butler.subset('calexp', visit=visit)
+    try:
+        datarefs = butler.subset('calexp', visit=visit)
+    except dp.butlerExceptions.NoResults:
+        datarefs = butler.subset('calexp', expId=visit)
     dataId = dict()
     dataId.update(list(datarefs)[0].dataId)
     dataId['raftName'] = 'R22'
@@ -321,7 +330,11 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
     band = None
-    for dataref in butler.subset('src', visit=visit):
+    try:
+        datarefs = butler.subset('src', visit=visit)
+    except dp.butlerExceptions.NoResults:
+        datarefs = butler.subset('src', expId=visit)
+    for dataref in datarefs:
         try:
             src = dataref.get('src')
         except dp.butlerExceptions.NoResults:
@@ -469,7 +482,10 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
          extrapolated five sigma depth)
     """
     butler = dp.Butler(repo)
-    band = list(butler.subset('src', visit=visit))[0].dataId['filter']
+    try:
+        band = list(butler.subset('src', visit=visit))[0].dataId['filter']
+    except dp.butlerExceptions.NoResults:
+        band = list(butler.subset('src', expId=visit))[0].dataId['filter']
     center_radec = get_center_radec(butler, visit, opsim_db)
     ref_cat = get_ref_cat(butler, visit, center_radec)
 
