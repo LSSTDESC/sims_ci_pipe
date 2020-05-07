@@ -110,7 +110,7 @@ class PipelineStage:
         self.repo_dir = os.path.join(self.run_dir, pipe_config['repo_dir'])
         self.fits_dir = os.path.join(self.run_dir, pipe_config['fits_dir'])
 
-    def execute(self, command, do_raise=False):
+    def execute(self, command):
         """
         Use subprocess.check_call to execute a command line.
 
@@ -118,20 +118,12 @@ class PipelineStage:
         ----------
         command: str
             The command line to run in a shell.
-        do_raise: bool [False]
-            Flag to re-raise any caught CalledProcessErrors.  If False,
-            then ignore any such errors.
         """
         print(command)
         if self.dry_run:
             return
-        try:
-            retcode = subprocess.check_call(command, shell=True)
-        except subprocess.CalledProcessError as eobj:
-            if do_raise:
-                raise eobj
-            retcode = 'CalledProcessError'
-        print('retcode:', retcode)
+        subprocess.check_call(command, shell=True)
+
 
 class ImsimStage(PipelineStage):
     """
