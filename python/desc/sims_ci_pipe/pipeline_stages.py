@@ -59,7 +59,10 @@ def get_visits(repo, dataset_type='raw'):
     visits = dict()
     for dataref in datarefs:
         md = dataref.get(f'{dataset_type}_md')
-        visits[dataref.dataId['visit']] = md.getScalar('FILTER')
+        try:
+            visits[dataref.dataId['visit']] = md.getScalar('FILTER')
+        except KeyError:
+            visits[dataref.dataId['expId']] = md.getScalar('FILTER')
     return visits
 
 
