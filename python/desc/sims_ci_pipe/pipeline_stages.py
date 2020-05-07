@@ -161,9 +161,11 @@ class ImsimStage(PipelineStage):
             if band not in self.bands:
                 continue
             visits[band].append(visit)
-            command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {self.fits_dir} --create_centroid_file --config_file {config_file} --processes {processes} --seed {visit}'
+            command = f'time imsim.py {instcat} --psf {psf} --sensors "{sensors}" --log_level DEBUG --outdir {self.fits_dir} --config_file {config_file} --processes {processes} --seed {visit}'
             if config['disable_sensor_model']:
                 command += ' --disable_sensor_model'
+            if config['create_centroid_file']:
+                command += ' --create_centroid_file'
             log_file = os.path.join(self.log_dir, f'imsim_v{visit}-{band}.log')
             command = f'({command}) >& {log_file}'
             self.execute(command)
