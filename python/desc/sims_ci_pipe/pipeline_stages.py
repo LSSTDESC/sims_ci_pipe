@@ -60,10 +60,12 @@ def get_visits(repo, dataset_type='raw'):
     for dataref in datarefs:
         md = dataref.get(f'{dataset_type}_md')
         try:
-            visits[dataref.dataId['visit']] = md.getScalar('FILTER')
+            visit_key_name = 'visit'
+            visits[dataref.dataId[visit_key_name]] = md.getScalar('FILTER')
         except KeyError:
-            visits[dataref.dataId['expId']] = md.getScalar('FILTER')
-    return visits
+            visit_key_name = 'expId'
+            visits[dataref.dataId[visit_key_name]] = md.getScalar('FILTER')
+    return visits, visit_key_name
 
 
 def merge_metric_files(metric_files):
@@ -219,12 +221,12 @@ class ProcessCcdsStage(PipelineStage):
             options = config['options']
         except KeyError:
             options = ''
-        visits = get_visits(self.repo_dir)
+        visits, visit_key_name = get_visits(self.repo_dir)
         print(visits)
         for visit, band in visits.items():
             if band not in self.bands:
                 continue
-            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --longlog {options}) >& {self.log_dir}/processCcd_{visit}.log'
+            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id {visit_key_name}={visit} --processes {processes} --longlog {options}) >& {self.log_dir}/processCcd_{visit}.log'
             self.execute(command)
 
 
@@ -245,7 +247,7 @@ class SfpValidationStage(PipelineStage):
         opsim_db = config['opsim_db']
         outdir = os.path.join(self.run_dir, config['out_dir'])
         os.makedirs(outdir, exist_ok=True)
-        visits = get_visits(self.repo_dir)
+        visits, _ = get_visits(self.repo_dir)
         for visit, band in visits.items():
             if band not in self.bands:
                 continue
