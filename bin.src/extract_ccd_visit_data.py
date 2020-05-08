@@ -117,10 +117,11 @@ if __name__ == '__main__':
         dfs = [extract_visit_data(butler, visit, visit_name=visit_name)
                for visit in visits]
     else:
-        with multiprocessing.Pool(processes=processes) as pool:
+        with multiprocessing.Pool(processes=args.processes) as pool:
             workers = [pool.apply_async(extract_visit_data,
                                         (butler, visit),
-                                        dict(visit_name=visit_name))]
+                                        dict(visit_name=visit_name))
+                       for visit in visits]
             pool.close()
             pool.join()
             dfs = [worker.get() for worker in workers]
