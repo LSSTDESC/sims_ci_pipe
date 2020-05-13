@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """
-Script to extract CCD-level data, such as seeing, sky level, zero-points,
-m5 value from single visit data.
+Script to extract CCD-level data, such as seeing, sky level,
+zero-points, and the m5 value (magnitude of a 5-sigma detection) from
+single visit data.
 """
 from collections import defaultdict
 import multiprocessing
@@ -66,11 +67,11 @@ def extract_ccd_data(datarefs, visit_name='visit'):
         model_flux = src.get('base_PsfFlux_instFlux')
         num_children = src.get('deblend_nChild')
         data['num_galaxies'].append(len(src.subset((ext != 0) &
-                                                   (model_flag == False) &
+                                                   (~model_flag) &
                                                    (model_flux > 0) &
                                                    (num_children == 0))))
         stars = src.subset((ext == 0) &
-                           (model_flag == False) &
+                           (~model_flag) &
                            (model_flux > 0) &
                            (num_children == 0)).copy(deep=True)
         data['num_stars'].append(len(stars))
@@ -92,7 +93,7 @@ if __name__ == '__main__':
                         help='Repository with single frame processing data.')
     parser.add_argument('outfile', type=str, help='Output filename.')
     parser.add_argument('--visits', type=int, nargs='+',
-                        help='Visits to process. If omitted, then visits '
+                        help='Visits to process. If omitted, then all visits '
                         'in the repo will be processed.')
     parser.add_argument('--processes', type=int, default=1,
                         help='Number of subprocesses to use.')
@@ -111,7 +112,7 @@ if __name__ == '__main__':
     if not visits:
         # Get a sorted list of all visits in this repo.
         datarefs = butler.subset('calexp')
-        visits = sorted(list(set([_.dataId[visit_name] for _ in datarefs])))
+        visits = sorted(list(set(_.dataId[visit_name] for _ in datarefs)))
 
     if args.processes == 1:
         dfs = [extract_visit_data(butler, visit, visit_name=visit_name)
