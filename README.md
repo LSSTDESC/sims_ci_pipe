@@ -9,6 +9,8 @@ $ nosetests <sims_ci_pipe install directory>
 
 ## Demo
 
+Some demos are available on the [wiki](../../wiki).
+
 ## People
 * [Jim Chiang](https://github.com/DarkEnergyScienceCollaboration/sims_ci_pipe/issues/new?body=@jchiang87) (SLAC)
 
