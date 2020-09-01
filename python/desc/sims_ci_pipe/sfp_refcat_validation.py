@@ -10,6 +10,7 @@ from matplotlib.ticker import NullFormatter
 from scipy.stats import binned_statistic
 import pandas as pd
 import healpy as hp
+import lsst.afw.fits as afw_fits
 import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
 import lsst.daf.persistence as dp
@@ -203,6 +204,9 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
                                          flux_type=flux_type)
         except dp.butlerExceptions.NoResults:
             pass
+        except afw_fits.FitsError:
+            print("FitsError raised reading sfp data for", dataref.dataId)
+            print(eobj)
         else:
             print(i, dataref.dataId)
             if df is None:
@@ -316,6 +320,9 @@ def get_center_radec(butler, visit, opsim_db=None):
             ccd_center = ref_cat.ccd_center(dataref.dataId)
         except dp.butlerExceptions.NoResults:
             pass
+        except afw_fits.FitsError:
+            print("FitsError raised reading sfp data for", dataref.dataId)
+            print(eobj)
         else:
             ras.append(ccd_center.getLongitude())
             decs.append(ccd_center.getLatitude())
@@ -338,6 +345,10 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
         try:
             src = dataref.get('src')
         except dp.butlerExceptions.NoResults:
+            continue
+        except afw_fits.FitsError:
+            print("FitsError raised reading sfp data for", dataref.dataId)
+            print(eobj)
             continue
         if band is None:
             band = dataref.dataId['filter']
@@ -483,9 +494,14 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     """
     butler = dp.Butler(repo)
     try:
-        band = list(butler.subset('src', visit=visit))[0].dataId['filter']
-    except dp.butlerExceptions.NoResults:
-        band = list(butler.subset('src', expId=visit))[0].dataId['filter']
+        try:
+            band = list(butler.subset('src', visit=visit))[0].dataId['filter']
+        except dp.butlerExceptions.NoResults:
+            band = list(butler.subset('src', expId=visit))[0].dataId['filter']
+    except Exception as eobj:
+        print('visit:', visit)
+        print(eobj)
+        raise eobj
     center_radec = get_center_radec(butler, visit, opsim_db)
     ref_cat = get_ref_cat(butler, visit, center_radec)
 
