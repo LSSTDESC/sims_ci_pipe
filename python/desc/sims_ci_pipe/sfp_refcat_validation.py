@@ -94,42 +94,46 @@ class RefCat:
 
 
 def point_source_matches(dataref, ref_cat0, max_offset=0.1,
-                         src_columns=(), ref_columns=(),
-                         flux_type='base_PsfFlux'):
+                         cat_columns=(), ref_columns=(),
+                         flux_type='base_PsfFlux', datasetType='src'):
     """
     Match point sources between a reference catalog and the dataref
-    pointing to a src catalog.
+    pointing to a SourceCatalog.
 
     Parameters
     ----------
     dataref: lsst.daf.persistence.butlerSubset.ButlerDataref
-        Dataref pointing to the desired sensor-visit.
+        Dataref pointing to the desired visit- or coadd-level dataset.
     ref_cat0: lsst.afw.table.SimpleCatalog
         The reference catalog.
     max_offset: float [0.1]
         Maximum offset for positional matching in arcseconds.
-    src_columns: list-like [()]
-        Columns from the src catalog to save in the output dataframe.
+    cat_columns: list-like [()]
+        Columns from the source catalog to save in the output dataframe.
     ref_columns: list-like [()]
         Columns from the reference catalog to save in the output dataframe.
         The column names will have 'ref_' prepended.
     flux_type: str ['base_PsfFlux']
         Flux type for point sources.
+    datasetType: str ['src']
+        SourceCatalog dataset type.  'src' corresponds to single-frame
+        processing src catalogs, 'deepCoadd_meas' corresponds to
+        object catalogs from multiband processing.
 
     Returns
     -------
     pandas.DataFrame
     """
     flux_col = f'{flux_type}_instFlux'
-    src0 = dataref.get('src')
+    cat0 = dataref.get(datasetType)
     band = dataref.dataId['filter']
 
     # Apply point source selections to the source catalog.
-    ext = src0.get('base_ClassificationExtendedness_value')
-    model_flag = src0.get(f'{flux_type}_flag')
-    model_flux = src0.get(flux_col)
-    num_children = src0.get('deblend_nChild')
-    src = src0.subset((ext == 0) &
+    ext = cat0.get('base_ClassificationExtendedness_value')
+    model_flag = cat0.get(f'{flux_type}_flag')
+    model_flux = cat0.get(flux_col)
+    num_children = cat0.get('deblend_nChild')
+    cat = cat0.subset((ext == 0) &
                       (model_flag == False) &
                       (model_flux > 0) &
                       (num_children == 0))
@@ -137,30 +141,34 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     # Match RA, Dec with the reference catalog stars.
     ref_cat = ref_cat0.subset((ref_cat0.get('resolved') == 0))
     radius = lsst_geom.Angle(max_offset, lsst_geom.arcseconds)
-    matches = afw_table.matchRaDec(ref_cat, src, radius)
+    matches = afw_table.matchRaDec(ref_cat, cat, radius)
     num_matches = len(matches)
 
     offsets = np.zeros(num_matches, dtype=np.float)
     ref_ras = np.zeros(num_matches, dtype=np.float)
     ref_decs = np.zeros(num_matches, dtype=np.float)
     ref_mags = np.zeros(num_matches, dtype=np.float)
-    src_mags = np.zeros(num_matches, dtype=np.float)
+    cat_mags = np.zeros(num_matches, dtype=np.float)
     ref_data = defaultdict(list)
-    src_data = defaultdict(list)
-    calib = dataref.get('calexp_photoCalib')
+    cat_data = defaultdict(list)
+    if datasetType == 'src':
+        calexp = dataref.get('calexp')
+    elif datasetType == 'deepCoadd_meas':
+        calexp = dataref.get('deepCoadd_calexp')
+    calib = calexp.getPhotoCalib()
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
         ref_mags[i] = match.first[f'lsst_{band}']
         ref_ras[i] = match.first['coord_ra']
         ref_decs[i] = match.first['coord_dec']
-        src_mags[i] = calib.instFluxToMagnitude(match.second[flux_col])
+        cat_mags[i] = calib.instFluxToMagnitude(match.second[flux_col])
         for ref_col in ref_columns:
             ref_data[f'ref_{ref_col}'].append(match.first[ref_col])
-        for src_col in src_columns:
-            src_data[src_col].append(match.second[src_col])
-    data = dict(offset=offsets, ref_mag=ref_mags, src_mag=src_mags,
+        for cat_col in cat_columns:
+            cat_data[cat_col].append(match.second[cat_col])
+    data = dict(offset=offsets, ref_mag=ref_mags, cat_mag=cat_mags,
                 ref_ra=ref_ras, ref_dec=ref_decs)
-    data.update(src_data)
+    data.update(cat_data)
     data.update(ref_data)
     return pd.DataFrame(data=data)
 
@@ -199,7 +207,7 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
         try:
             my_df = point_source_matches(dataref, ref_cat,
                                          max_offset=max_offset,
-                                         src_columns=src_columns,
+                                         cat_columns=src_columns,
                                          flux_type=flux_type)
         except dp.butlerExceptions.NoResults:
             pass
