@@ -5,6 +5,7 @@ import itertools
 import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
+import lsst.afw.fits as afw_fits
 import lsst.daf.persistence as dp
 import lsst.geom as lsst_geom
 import lsst.daf.persistence as dp
@@ -67,7 +68,7 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords,
     for dataref in list(datarefs):
         try:
             calexp = dataref.get('calexp')
-        except dp.butlerExceptions.NoResults:
+        except (dp.butlerExceptions.NoResults, afw_fits.FitsError):
             continue
         wcs = calexp.getWcs()
         psf = calexp.getPsf()

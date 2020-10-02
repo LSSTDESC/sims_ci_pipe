@@ -37,9 +37,9 @@ def get_psf_calib_mags(butler, visit, sn_min=150):
     for dataref in list(datarefs):
         try:
             src = dataref.get('src')
+            photoCalib = dataref.get('calexp_photoCalib')
         except:
             continue
-        photoCalib = dataref.get('calexp_photoCalib')
         visit = dataref.dataId['visit']
         stars = get_point_sources(src)
         psf_mags.extend(photoCalib.instFluxToMagnitude(
