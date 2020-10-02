@@ -22,6 +22,7 @@ __all__ = ['RefCat', 'point_source_matches', 'tract_ptsrc_matches',
            'visit_ptsrc_matches',
            'make_depth_map', 'plot_binned_stats', 'get_center_radec',
            'plot_detection_efficiency', 'get_ref_cat',
+           'astrometry_offset_plot', 'photometry_offset_plot',
            'sfp_validation_plots']
 
 
@@ -396,7 +397,7 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
         coord_ra = src.get('coord_ra')
         coord_dec = src.get('coord_dec')
         index = ((ext == 0) &
-                 (model_flag == False) &
+                 (~model_flag) &
                  (model_flux > 0) &
                  (num_children == 0))
         src_ra.extend(coord_ra[index])
@@ -493,6 +494,68 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
     return dmag_median
 
 
+def astrometry_offset_plot(ax, df, max_offset=0.1, title=''):
+    """
+    Make hexbin plot of matched object offsets from reference catalog
+    coordinates in RA, Dec.
+    """
+    coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
+    coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
+    dra = np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))*3600*1000
+    ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
+
+    max_offset *= 1e3*1.2
+    xy_range = (-max_offset, max_offset)
+    plt.hexbin(dra, ddec, mincnt=1)
+    plt.xlabel('RA offset (mas)')
+    plt.ylabel('Dec offset (mas)')
+    plt.xlim(*xy_range)
+    plt.ylim(*xy_range)
+
+    nullfmt = NullFormatter()
+
+    ax_ra = ax.twinx()
+    ax_ra.yaxis.set_major_formatter(nullfmt)
+    ax_ra.yaxis.set_ticks([])
+    bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
+                          density=True, color='red')
+    ax_ra.set_ylim(0, 2.3*np.max(bins))
+
+    ax_dec = ax.twiny()
+    ax_dec.xaxis.set_major_formatter(nullfmt)
+    ax_dec.xaxis.set_ticks([])
+    bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
+                          density=True, color='red', orientation='horizontal')
+    ax_dec.set_xlim(0, 2.3*np.max(bins))
+
+    median_offset = np.median(df['offset'])
+    plt.annotate(f'{median_offset:.1f} mas med. offset', (0.4, 0.95),
+                 xycoords='axes fraction', horizontalalignment='left')
+    plt.title(title)
+    plt.colorbar()
+
+    return median_offset
+
+
+def photometry_offset_plot(df, flux_type='base_PsfFlux', bins=20, title=''):
+    """
+    Make a hexbin plot of photometric offsets.
+    """
+    delta_mag = df['cat_mag'] - df['ref_mag']
+    dmag_med = np.nanmedian(delta_mag)
+    ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
+    plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
+    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
+                      bins=bins)
+    plt.xlabel('ref_mag')
+    plt.ylabel(f'{flux_type}_mag - ref_mag')
+    plt.ylim(ymin, ymax)
+    plt.title(title)
+    plt.colorbar()
+    xmin, xmax = plt.axis()[:2]
+    return xmin, xmax
+
+
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                          opsim_db=None, figsize=(12, 10), max_offset=0.1,
                          sn_min=150):
@@ -547,58 +610,14 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         df = pd.read_pickle(pickle_file)
 
     fig = plt.figure(figsize=figsize)
+
     ax = fig.add_subplot(2, 2, 1)
-
-    coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
-    coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
-    dra = np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))*3600*1000
-    ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
-
-    max_offset *= 1e3*1.2
-    xy_range = (-max_offset, max_offset)
-    plt.hexbin(dra, ddec, mincnt=1)
-    plt.xlabel('RA offset (mas)')
-    plt.ylabel('Dec offset (mas)')
-    plt.xlim(*xy_range)
-    plt.ylim(*xy_range)
-
-    nullfmt = NullFormatter()
-
-    ax_ra = ax.twinx()
-    ax_ra.yaxis.set_major_formatter(nullfmt)
-    ax_ra.yaxis.set_ticks([])
-    bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
-                          density=True, color='red')
-    ax_ra.set_ylim(0, 2.3*np.max(bins))
-
-    ax_dec = ax.twiny()
-    ax_dec.xaxis.set_major_formatter(nullfmt)
-    ax_dec.xaxis.set_ticks([])
-    bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
-                          density=True, color='red', orientation='horizontal')
-    ax_dec.set_xlim(0, 2.3*np.max(bins))
-
-    median_offset = np.median(df['offset'])
-    plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
-                 xycoords='axes fraction', horizontalalignment='left')
-
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
+    median_offset = astrometry_offset_plot(ax, df, max_offset=max_offset,
+                                           title=f'v{visit}-{band}')
 
     fig.add_subplot(2, 2, 2)
-    bins = 20
-    delta_mag = df['cat_mag'] - df['ref_mag']
-    dmag_med = np.nanmedian(delta_mag)
-    ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
-    plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
-    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
-                      bins=20)
-    plt.xlabel('ref_mag')
-    plt.ylabel(f'{flux_type}_mag - ref_mag')
-    plt.ylim(ymin, ymax)
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
-    xmin, xmax = plt.axis()[:2]
+    xmin, xmax = photometry_offset_plot(df, flux_type=flux_type, bins=20,
+                                        title=f'v{visit}-{band}')
 
     fig.add_subplot(2, 2, 3)
     T = (df['base_SdssShape_xx'] + df['base_SdssShape_yy'])*0.2**2
