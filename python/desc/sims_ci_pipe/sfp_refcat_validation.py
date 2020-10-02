@@ -548,7 +548,7 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
 
     fig.add_subplot(2, 2, 2)
     bins = 20
-    delta_mag = df['src_mag'] - df['ref_mag']
+    delta_mag = df['cat_mag'] - df['ref_mag']
     dmag_med = np.nanmedian(delta_mag)
     ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
     plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
@@ -612,7 +612,7 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     my_df = df.query('base_PsfFlux_instFlux/base_PsfFlux_instFluxErr'
                      f' > {sn_min}')
     fig = plt.figure(figsize=(6, 4))
-    dmag_ref_median = plot_dmags(my_df['src_mag'], my_df['ref_mag'],
+    dmag_ref_median = plot_dmags(my_df['cat_mag'], my_df['ref_mag'],
                                  sn_min=sn_min)
     plt.title(f'v{visit}-{band}')
     outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
