@@ -18,7 +18,8 @@ from .psf_mag_check import psf_mag_check
 from .psf_whisker_plot import psf_whisker_plot
 
 
-__all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
+__all__ = ['RefCat', 'point_source_matches', 'tract_ptsrc_matches',
+           'visit_ptsrc_matches',
            'make_depth_map', 'plot_binned_stats', 'get_center_radec',
            'plot_detection_efficiency', 'get_ref_cat',
            'sfp_validation_plots']
@@ -186,6 +187,44 @@ def get_ref_cat(butler, visit, center_radec, radius=2.1):
     centerCoord = lsst_geom.SpherePoint(center_radec[0]*lsst_geom.degrees,
                                         center_radec[1]*lsst_geom.degrees)
     return ref_cats(centerCoord, band, radius)
+
+
+def tract_ptsrc_matches(butler, band, tract_id, cat_columns=None,
+                        max_offset=0.1, flux_type='base_PsfFlux',
+                        patch_radius=0.2):
+    """
+    Match point sources in the deepCoadd_meas object catalogs for the
+    specified band and tract.
+    """
+    if cat_columns is None:
+        cat_columns = ['coord_ra', 'coord_dec',
+                       'base_SdssShape_xx', 'base_SdssShape_yy',
+                       f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
+    ref_cat0 = RefCat(butler)
+    sky_map = butler.get('deepCoadd_skyMap')
+    tract = sky_map[tract_id]
+    dataId = dict(filter=band, tract=tract_id)
+    # Loop over patches in the tract and match objects against
+    # reference catalog stars.
+    dfs = []
+    for patch in tract:
+        # Extract reference catalog entries for current patch.
+        bbox = patch.getInnerBBox()
+        center_coord = tract.getWcs().pixelToSky(bbox.centerX, bbox.centerY)
+        ref_cat = ref_cat(center_coord, dataId['filter'], patch_radius)
+
+        # Get the dataref for this patch.
+        dataId['patch'] = '{:d},{:d}'.format(*patch.getIndex())
+        dataref = list(butler.subset('deepCoadd_meas', dataId=dataId))[0]
+
+        try:
+            df = point_source_matches(dataref, ref_cat, cat_columns=cat_columns,
+                                      datasetType='deepCoadd_meas')
+        except dp.butlerExceptions.NoResults as eobj:
+            pass
+        else:
+            dfs.append(df)
+    return pd.concat(dfs, ignore_index=True, sort=False)
 
 
 def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
