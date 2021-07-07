@@ -5,7 +5,7 @@ for biases in photometry.
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import lsst.daf.persistence as dp
+import lsst.daf.butler as daf_butler
 from .ellipticity_distributions import get_point_sources
 
 
@@ -29,15 +29,16 @@ def get_psf_calib_mags(butler, visit, sn_min=150):
     -------
     pandas.DataFrame containing the psf_mag and calib_mag values.
     """
-    datarefs = butler.subset('src', visit=visit)
+    datarefs = butler.registry.queryDatasets('src', visit=visit)
     psf_mags = []
     calib_mags = []
     psf_fluxes = []
     psf_fluxErrs = []
     for dataref in list(datarefs):
         try:
-            src = dataref.get('src')
-            photoCalib = dataref.get('calexp_photoCalib')
+            src = butler.get(dataref)
+            photoCalib = butler.get('calexp', dataId=dataref.dataId)\
+                               .getPhotoCalib()
         except:
             continue
         visit = dataref.dataId['visit']
@@ -78,7 +79,9 @@ def psf_mag_check(repo, visit, dmag_range=(-0.05, 0.05), sn_min=150):
     -------
     float: An estimate of the delta_mag peak location.
     """
-    butler = dp.Butler(repo)
+    butler = daf_butler.Butler(repo)
+    collections = list(butler.registry.queryCollections())
+    butler = daf_butler.Butler(repo, collections=collections)
     df = get_psf_calib_mags(butler, visit, sn_min=sn_min)
     if len(df) == 0:
         return None

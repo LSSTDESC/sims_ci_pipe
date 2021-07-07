@@ -14,9 +14,12 @@ import lsst.afw.fits as afw_fits
 import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
 import lsst.daf.persistence as dp
-from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask
+import lsst.daf.butler as daf_butler
+from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask, \
+    ReferenceObjectLoader
 from .psf_mag_check import psf_mag_check
 from .psf_whisker_plot import psf_whisker_plot
+from .deferredDSLoader import DeferredDSLoader
 
 
 __all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
@@ -46,10 +49,15 @@ class RefCat:
         Handle for the ReferenceObjectsTask.
         """
         if self._ref_task is None:
+            registry = self.butler.registry
+            dsrefs = registry.queryDatasets('cal_ref_cat')
+            refCats = [DeferredDSLoader(self.butler, _) for _ in dsrefs]
+            dataIds = [registry.expandDataId(_.dataId) for _ in dsrefs]
             refConfig = LoadIndexedReferenceObjectsTask.ConfigClass()
             refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
-            self._ref_task = LoadIndexedReferenceObjectsTask(self.butler,
-                                                             config=refConfig)
+            self._ref_task = ReferenceObjectLoader(dataIds=dataIds,
+                                                   refCats=refCats,
+                                                   config=refConfig)
         return self._ref_task
 
     def ccd_center(self, dataId):
@@ -123,7 +131,7 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     """
     flux_col = f'{flux_type}_instFlux'
     src0 = dataref.get('src')
-    band = dataref.dataId['filter']
+    band = dataref.dataId['band']
 
     # Apply point source selections to the source catalog.
     ext = src0.get('base_ClassificationExtendedness_value')
@@ -131,7 +139,7 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     model_flux = src0.get(flux_col)
     num_children = src0.get('deblend_nChild')
     src = src0.subset((ext == 0) &
-                      (model_flag == False) &
+                      ~model_flag &
                       (model_flux > 0) &
                       (num_children == 0))
 
@@ -148,7 +156,7 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     src_mags = np.zeros(num_matches, dtype=np.float)
     ref_data = defaultdict(list)
     src_data = defaultdict(list)
-    calib = dataref.get('calexp_photoCalib')
+    calib = dataref.get('calexp').getPhotoCalib()
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
         ref_mags[i] = match.first[f'lsst_{band}']
@@ -166,22 +174,18 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     return pd.DataFrame(data=data)
 
 
-def get_ref_cat(butler, visit, center_radec, radius=2.1):
+def get_ref_cat(butler, visit, band, center_radec, radius=2.1):
     """
     Get the reference catalog for the desired visit for the requested
     sky location and sky cone radius.
     """
     ref_cats = RefCat(butler)
-    try:
-        band = list(butler.subset('src', visit=visit))[0].dataId['filter']
-    except dp.butlerExceptions.NoResults:
-        band = list(butler.subset('src', expId=visit))[0].dataId['filter']
     centerCoord = lsst_geom.SpherePoint(center_radec[0]*lsst_geom.degrees,
                                         center_radec[1]*lsst_geom.degrees)
     return ref_cats(centerCoord, band, radius)
 
 
-def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
+def visit_ptsrc_matches(butler, visit, band, center_radec, src_columns=None,
                         max_offset=0.1, flux_type='base_PsfFlux'):
     """
     Perform point source matching on each dataref/sensor in a visit.
@@ -190,15 +194,13 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
                        f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
-    try:
-        datarefs = butler.subset('src', visit=visit)
-    except dp.butlerExceptions.NoResults:
-        datarefs = butler.subset('src', expId=visit)
-    ref_cat = get_ref_cat(butler, visit, center_radec)
+    datarefs = butler.registry.queryDatasets('src', visit=visit)
+    ref_cat = get_ref_cat(butler, visit, band, center_radec)
     df = None
     for i, dataref in enumerate(datarefs):
         try:
-            my_df = point_source_matches(dataref, ref_cat,
+            my_df = point_source_matches(DeferredDSLoader(butler, dataref),
+                                         ref_cat,
                                          max_offset=max_offset,
                                          src_columns=src_columns,
                                          flux_type=flux_type)
@@ -293,36 +295,31 @@ def get_center_radec(butler, visit, opsim_db=None):
         return (np.degrees(df.iloc[0].descDitheredRA),
                 np.degrees(df.iloc[0].descDitheredDec))
 
-    # Return the center of R22_S11, if it's available.
+    # Return the center of detector=94, if it's available.
     ref_cat = RefCat(butler)
-    try:
-        datarefs = butler.subset('calexp', visit=visit)
-    except dp.butlerExceptions.NoResults:
-        datarefs = butler.subset('calexp', expId=visit)
+    datarefs = butler.registry.queryDatasets('calexp', visit=visit)
     dataId = dict()
     dataId.update(list(datarefs)[0].dataId)
-    dataId['raftName'] = 'R22'
-    dataId['detectorName'] = 'S11'
-    dataId.pop('detector')
+    dataId['detector'] = 94
     try:
         ccd_center = ref_cat.ccd_center(dataId)
-    except dp.butlerExceptions.NoResults as eobj:
+    except Exception as eobj:
         print(eobj)
     else:
         return (ccd_center.getLongitude().asDegrees(),
                 ccd_center.getLatitude().asDegrees())
 
-    # R22_S11 isn't available, so loop over all available CCDs and use
+    # Detector 94 isn't available, so loop over all available CCDs and use
     # the medians in ra, dec of the coordinate centers.
     ras, decs = [], []
     for dataref in datarefs:
         try:
             ccd_center = ref_cat.ccd_center(dataref.dataId)
-        except dp.butlerExceptions.NoResults:
-            pass
         except afw_fits.FitsError:
             print("FitsError raised reading sfp data for", dataref.dataId)
             print(eobj)
+        except:
+            pass
         else:
             ras.append(ccd_center.getLongitude())
             decs.append(ccd_center.getLatitude())
@@ -337,21 +334,17 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
     band = None
-    try:
-        datarefs = butler.subset('src', visit=visit)
-    except dp.butlerExceptions.NoResults:
-        datarefs = butler.subset('src', expId=visit)
+    datarefs = butler.registry.queryDatasets('src', visit=visit)
     for dataref in datarefs:
         try:
-            src = dataref.get('src')
-        except dp.butlerExceptions.NoResults:
-            continue
+            src = butler.get(dataref)
         except afw_fits.FitsError:
             print("FitsError raised reading sfp data for", dataref.dataId)
             print(eobj)
             continue
         if band is None:
-            band = dataref.dataId['filter']
+            band = butler.registry.expandDataId(dataref.dataId)\
+                                  .records['band'].name
         # Apply point source selections to the source catalog.
         ext = src.get('base_ClassificationExtendedness_value')
         model_flag = src.get(f'{flux_type}_flag')
@@ -360,7 +353,7 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
         coord_ra = src.get('coord_ra')
         coord_dec = src.get('coord_dec')
         index = ((ext == 0) &
-                 (model_flag == False) &
+                 ~model_flag &
                  (model_flux > 0) &
                  (num_children == 0))
         src_ra.extend(coord_ra[index])
@@ -459,7 +452,7 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
 
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                          opsim_db=None, figsize=(12, 10), max_offset=0.1,
-                         sn_min=150):
+                         sn_min=150, instrument='LSSTCam-imSim'):
     """
     Create the single-frame validation plots.
 
@@ -492,24 +485,29 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         (median astrometric offset, median delta magitude, median T value,
          extrapolated five sigma depth)
     """
-    butler = dp.Butler(repo)
+    butler = daf_butler.Butler(repo)
+    registry = butler.registry
+    collections = list(registry.queryCollections())
+    butler = daf_butler.Butler(repo, collections=collections)
+
     try:
-        try:
-            band = list(butler.subset('src', visit=visit))[0].dataId['filter']
-        except dp.butlerExceptions.NoResults:
-            band = list(butler.subset('src', expId=visit))[0].dataId['filter']
+        dsrefs = list(registry.queryDatasets('src', visit=visit,
+                                             instrument=instrument,
+                                             collections=collections))
+        dims = registry.expandDataId(dsrefs[0].dataId)
+        band = dims.records['band'].name
     except Exception as eobj:
         print('visit:', visit)
         print(eobj)
         raise eobj
     center_radec = get_center_radec(butler, visit, opsim_db)
-    ref_cat = get_ref_cat(butler, visit, center_radec)
+    ref_cat = get_ref_cat(butler, visit, band, center_radec)
 
     os.makedirs(outdir, exist_ok=True)
     pickle_file = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.pkl')
 
     if not os.path.isfile(pickle_file):
-        df = visit_ptsrc_matches(butler, visit, center_radec,
+        df = visit_ptsrc_matches(butler, visit, band, center_radec,
                                  max_offset=max_offset)
         df.to_pickle(pickle_file)
     else:
@@ -552,7 +550,7 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                  xycoords='axes fraction', horizontalalignment='left')
 
     plt.title(f'v{visit}-{band}')
-    plt.colorbar()
+    plt.colorbar(ax=ax)
 
     fig.add_subplot(2, 2, 2)
     bins = 20
