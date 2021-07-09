@@ -8,7 +8,8 @@ from collections import defaultdict
 import subprocess
 import yaml
 import pandas as pd
-import lsst.daf.persistence as dp
+import lsst.daf.butler as daf_butler
+from .get_point_sources import get_band
 
 
 __all__ = ['pipeline_stages', 'get_visits', 'merge_metric_files']
@@ -38,7 +39,8 @@ def get_visit_info(instcat):
     return visit, band
 
 
-def get_visits(repo, dataset_type='raw'):
+def get_visits(repo, dataset_type='raw', instrument='LSSTCam-imSim',
+               collections=None):
     """
     Get the visit and band info as a dictionary from a data repo using
     the butler.
@@ -54,18 +56,19 @@ def get_visits(repo, dataset_type='raw'):
     -------
     dict with visits as the keys and the corresponding bands as the values.
     """
-    butler = dp.Butler(repo)
-    datarefs = butler.subset(dataset_type)
+    if collections is None:
+        butler = daf_butler.Butler(repo)
+        collections = list(butler.registry.queryCollections())
+    butler = daf_butler.Butler(repo, collections=collections)
+    datarefs = butler.registry.queryDatasets(dataset_type,
+                                             instrument=instrument)
     visits = dict()
     for dataref in datarefs:
-        md = dataref.get(f'{dataset_type}_md')
-        try:
-            visit_key_name = 'visit'
-            visits[dataref.dataId[visit_key_name]] = md.getScalar('FILTER')
-        except KeyError:
-            visit_key_name = 'expId'
-            visits[dataref.dataId[visit_key_name]] = md.getScalar('FILTER')
-    return visits, visit_key_name
+        visit = dataref.dataId['visit']
+        if visit in visits:
+            continue
+        visits[visit] = get_band(butler, dataref)
+    return visits
 
 
 def merge_metric_files(metric_files):
@@ -221,12 +224,12 @@ class ProcessCcdsStage(PipelineStage):
             options = config['options']
         except KeyError:
             options = ''
-        visits, visit_key_name = get_visits(self.repo_dir)
+        visits = get_visits(self.repo_dir)
         print(visits)
         for visit, band in visits.items():
             if band not in self.bands:
                 continue
-            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id {visit_key_name}={visit} --processes {processes} --longlog {options}) >& {self.log_dir}/processCcd_{visit}.log'
+            command = f'(time processCcd.py {self.repo_dir} --output {self.repo_dir} --id visit={visit} --processes {processes} --longlog {options}) >& {self.log_dir}/processCcd_{visit}.log'
             self.execute(command)
 
 
@@ -247,7 +250,7 @@ class SfpValidationStage(PipelineStage):
         opsim_db = config['opsim_db']
         outdir = os.path.join(self.run_dir, config['out_dir'])
         os.makedirs(outdir, exist_ok=True)
-        visits, _ = get_visits(self.repo_dir)
+        visits = get_visits(self.repo_dir)
         for visit, band in visits.items():
             if band not in self.bands:
                 continue

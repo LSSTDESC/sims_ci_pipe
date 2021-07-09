@@ -59,7 +59,8 @@ def get_psf_calib_mags(butler, visit, sn_min=150):
                                   calib_mag=calib_mags[index]))
 
 
-def psf_mag_check(repo, visit, dmag_range=(-0.05, 0.05), sn_min=150):
+def psf_mag_check(repo, visit, dmag_range=(-0.05, 0.05), sn_min=150,
+                  collections=None):
     """
     Plot distribution of  delta_mag = psf_mag - calib_mag values, and
     return estimate of the delta_mag peak location.
@@ -79,8 +80,9 @@ def psf_mag_check(repo, visit, dmag_range=(-0.05, 0.05), sn_min=150):
     -------
     float: An estimate of the delta_mag peak location.
     """
-    butler = daf_butler.Butler(repo)
-    collections = list(butler.registry.queryCollections())
+    if collections is None:
+        butler = daf_butler.Butler(repo)
+        collections = list(butler.registry.queryCollections())
     butler = daf_butler.Butler(repo, collections=collections)
     df = get_psf_calib_mags(butler, visit, sn_min=sn_min)
     if len(df) == 0:

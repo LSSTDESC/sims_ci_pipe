@@ -8,8 +8,7 @@ import matplotlib.pyplot as plt
 import lsst.afw.fits as afw_fits
 import lsst.geom as lsst_geom
 import lsst.daf.butler as daf_butler
-from .ellipticity_distributions import get_point_sources
-from .deferredDSLoader import DeferredDSLoader
+from .get_point_sources import get_point_sources, get_band
 
 
 __all__ = ['get_e_components', 'get_sky_coords', 'psf_whisker_plot']
@@ -67,8 +66,9 @@ def get_calexp_psf_ellipticity_components(datarefs, pixel_coords,
     ra_grid, dec_grid, e1_grid, e2_grid = [], [], [], []
     for dataref in list(datarefs):
         try:
-            calexp = dataref.get('calexp')
-        except afw_fits.FitsError:
+            calexp = dataref.butler.get('calexp', dataId=dataref.dataId)
+        except Exception as eobj:
+            print('get_calexp_psf_ellipticity_components:', eobj)
             continue
         wcs = calexp.getWcs()
         psf = calexp.getPsf()
@@ -114,10 +114,10 @@ def get_interpolated_psf_ellipticity_components(datarefs, pixel_coords,
     ras, decs, e1s, e2s = [], [], [], []
     ra_grid, dec_grid = [], []
     for dataref in datarefs:
-        ra_ccd_grid, dec_ccd_grid \
-            = get_sky_coords(dataref.get('calexp_wcs'), pixel_coords)
-        stars = get_point_sources(dataref.get('src'),
-                                  flags=('calib_psf_used',),
+        wcs = dataref.butler.get('calexp', dataId=dataref.dataId).getWcs()
+        ra_ccd_grid, dec_ccd_grid = get_sky_coords(wcs, pixel_coords)
+        src_cat = dataref.butler.get('src', dataId=dataref.dataId)
+        stars = get_point_sources(src_cat, flags=('calib_psf_used',),
                                   min_snr=min_snr)
         ra = [record['coord_ra'].asDegrees() for record in stars]
         dec = [record['coord_dec'].asDegrees() for record in stars]
@@ -174,10 +174,9 @@ def psf_whisker_plot(butler, visit, scale=0.5, xy_pixels=None, use_calexp=True,
     pixel_coords = [lsst_geom.Point2D(*_) for _ in
                     itertools.product(xy_pixels, xy_pixels)]
 
-    datarefs = [DeferredDSLoader(butler, _) for _ in
+    datarefs = [daf_butler.DeferredDatasetHandle(butler, _, None) for _ in
                 butler.registry.queryDatasets('calexp', visit=visit)]
-    dims = butler.registry.expandDataId(datarefs[0].dataId)
-    band = dims.records['band'].name
+    band = get_band(butler, datarefs[0])
 
     if use_calexp:
         ra, dec, e1, e2 \

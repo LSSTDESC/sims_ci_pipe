@@ -13,14 +13,12 @@ import healpy as hp
 import lsst.afw.fits as afw_fits
 import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
-import lsst.daf.persistence as dp
 import lsst.daf.butler as daf_butler
 from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask, \
     ReferenceObjectLoader
 from .psf_mag_check import psf_mag_check
 from .psf_whisker_plot import psf_whisker_plot
-from .deferredDSLoader import DeferredDSLoader
-
+from .get_point_sources import get_band
 
 __all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
            'make_depth_map', 'plot_binned_stats', 'get_center_radec',
@@ -51,7 +49,8 @@ class RefCat:
         if self._ref_task is None:
             registry = self.butler.registry
             dsrefs = registry.queryDatasets('cal_ref_cat')
-            refCats = [DeferredDSLoader(self.butler, _) for _ in dsrefs]
+            refCats = [daf_butler.DeferredDatasetHandle(self.butler, _, {})
+                       for _ in dsrefs]
             dataIds = [registry.expandDataId(_.dataId) for _ in dsrefs]
             refConfig = LoadIndexedReferenceObjectsTask.ConfigClass()
             refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
@@ -130,7 +129,7 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     pandas.DataFrame
     """
     flux_col = f'{flux_type}_instFlux'
-    src0 = dataref.get('src')
+    src0 = dataref.butler.get('src', dataId=dataref.dataId)
     band = dataref.dataId['band']
 
     # Apply point source selections to the source catalog.
@@ -156,7 +155,7 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     src_mags = np.zeros(num_matches, dtype=np.float)
     ref_data = defaultdict(list)
     src_data = defaultdict(list)
-    calib = dataref.get('calexp').getPhotoCalib()
+    calib = dataref.butler.get('calexp', dataId=dataref.dataId).getPhotoCalib()
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
         ref_mags[i] = match.first[f'lsst_{band}']
@@ -194,18 +193,23 @@ def visit_ptsrc_matches(butler, visit, band, center_radec, src_columns=None,
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
                        f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
-    datarefs = butler.registry.queryDatasets('src', visit=visit)
+    datarefs = butler.registry.queryDatasets('src', visit=visit,
+                                             findFirst=True)
     ref_cat = get_ref_cat(butler, visit, band, center_radec)
     df = None
+    detectors = set()
     for i, dataref in enumerate(datarefs):
+        detector = dataref.dataId['detector']
+        if detector in detectors:
+            continue
+        detectors.add(detector)
         try:
-            my_df = point_source_matches(DeferredDSLoader(butler, dataref),
-                                         ref_cat,
-                                         max_offset=max_offset,
-                                         src_columns=src_columns,
-                                         flux_type=flux_type)
-        except dp.butlerExceptions.NoResults:
-            pass
+            my_df = point_source_matches(
+                daf_butler.DeferredDatasetHandle(butler, dataref, None),
+                ref_cat,
+                max_offset=max_offset,
+                src_columns=src_columns,
+                flux_type=flux_type)
         except afw_fits.FitsError:
             print("FitsError raised reading sfp data for", dataref.dataId)
             print(eobj)
@@ -297,7 +301,8 @@ def get_center_radec(butler, visit, opsim_db=None):
 
     # Return the center of detector=94, if it's available.
     ref_cat = RefCat(butler)
-    datarefs = butler.registry.queryDatasets('calexp', visit=visit)
+    datarefs = butler.registry.queryDatasets('calexp', visit=visit,
+                                             findFirst=True)
     dataId = dict()
     dataId.update(list(datarefs)[0].dataId)
     dataId['detector'] = 94
@@ -334,7 +339,8 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
     band = None
-    datarefs = butler.registry.queryDatasets('src', visit=visit)
+    datarefs = butler.registry.queryDatasets('src', visit=visit,
+                                             findFirst=True)
     for dataref in datarefs:
         try:
             src = butler.get(dataref)
@@ -343,8 +349,7 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
             print(eobj)
             continue
         if band is None:
-            band = butler.registry.expandDataId(dataref.dataId)\
-                                  .records['band'].name
+            band = get_band(butler, dataref)
         # Apply point source selections to the source catalog.
         ext = src.get('base_ClassificationExtendedness_value')
         model_flag = src.get(f'{flux_type}_flag')
@@ -452,7 +457,8 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
 
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                          opsim_db=None, figsize=(12, 10), max_offset=0.1,
-                         sn_min=150, instrument='LSSTCam-imSim'):
+                         sn_min=150, instrument='LSSTCam-imSim',
+                         collections=None):
     """
     Create the single-frame validation plots.
 
@@ -485,17 +491,18 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         (median astrometric offset, median delta magitude, median T value,
          extrapolated five sigma depth)
     """
-    butler = daf_butler.Butler(repo)
-    registry = butler.registry
-    collections = list(registry.queryCollections())
+    if collections is None:
+        butler = daf_butler.Butler(repo)
+        collections = list(butler.registry.queryCollections())
+
     butler = daf_butler.Butler(repo, collections=collections)
 
     try:
-        dsrefs = list(registry.queryDatasets('src', visit=visit,
-                                             instrument=instrument,
-                                             collections=collections))
-        dims = registry.expandDataId(dsrefs[0].dataId)
-        band = dims.records['band'].name
+        dsrefs = list(butler.registry.queryDatasets('src', visit=visit,
+                                                    instrument=instrument,
+                                                    collections=collections,
+                                                    findFirst=True))
+        band = get_band(butler, dsrefs[0])
     except Exception as eobj:
         print('visit:', visit)
         print(eobj)
