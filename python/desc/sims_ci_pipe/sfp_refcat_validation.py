@@ -252,7 +252,8 @@ def make_depth_map(df, nside=128, snr_bounds=None):
     return map_out
 
 
-def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
+def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red',
+                      skip_plots=False):
     """
     Plot the median of the values corresponding to the binned x values.
     Errors on the median are derived from the stdev of values.
@@ -266,7 +267,8 @@ def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
     x_vals = (edges[1:] + edges[:-1])[index]/2.
     y_vals = binned_values['median'][index]
     yerr = binned_values['std'][index]/np.sqrt(binned_values['count'][index])
-    plt.errorbar(x_vals, y_vals, yerr=yerr, fmt=fmt, color=color)
+    if not skip_plots:
+        plt.errorbar(x_vals, y_vals, yerr=yerr, fmt=fmt, color=color)
     return x_vals, y_vals, yerr
 
 
@@ -421,7 +423,7 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
 
 
 def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
-               dmag_range=(-0.05, 0.05)):
+               dmag_range=(-0.05, 0.05), skip_plots=False):
     """
     Plot delta mag distribution.
 
@@ -444,6 +446,8 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
     """
     delta_mag = psf_mags - ref_mags
     dmag_median = np.median(delta_mag)
+    if skip_plots:
+        return dmag_median
     plt.hist(delta_mag, range=dmag_range, bins=100, histtype='step',
              density=True)
     plt.axvline(0, linestyle=':')
@@ -458,7 +462,7 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                          opsim_db=None, figsize=(12, 10), max_offset=0.1,
                          sn_min=150, instrument='LSSTCam-imSim',
-                         collections=None):
+                         collections=None, skip_plots=False):
     """
     Create the single-frame validation plots.
 
@@ -520,121 +524,133 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     else:
         df = pd.read_pickle(pickle_file)
 
-    fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(2, 2, 1)
-
-    coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
-    coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
-    dra = np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))*3600*1000
-    ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
-
-    max_offset *= 1e3*1.2
-    xy_range = (-max_offset, max_offset)
-    plt.hexbin(dra, ddec, mincnt=1)
-    plt.xlabel('RA offset (mas)')
-    plt.ylabel('Dec offset (mas)')
-    plt.xlim(*xy_range)
-    plt.ylim(*xy_range)
-
-    nullfmt = NullFormatter()
-
-    ax_ra = ax.twinx()
-    ax_ra.yaxis.set_major_formatter(nullfmt)
-    ax_ra.yaxis.set_ticks([])
-    bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
-                          density=True, color='red')
-    ax_ra.set_ylim(0, 2.3*np.max(bins))
-
-    ax_dec = ax.twiny()
-    ax_dec.xaxis.set_major_formatter(nullfmt)
-    ax_dec.xaxis.set_ticks([])
-    bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
-                          density=True, color='red', orientation='horizontal')
-    ax_dec.set_xlim(0, 2.3*np.max(bins))
-
     median_offset = np.median(df['offset'])
-    plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
-                 xycoords='axes fraction', horizontalalignment='left')
+    if not skip_plots:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(2, 2, 1)
 
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar(ax=ax)
+        coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
+        coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
+        dra = (np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))
+               *3600*1000)
+        ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
 
-    fig.add_subplot(2, 2, 2)
-    bins = 20
-    delta_mag = df['src_mag'] - df['ref_mag']
-    dmag_med = np.nanmedian(delta_mag)
-    ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
-    plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
-    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
-                      bins=20)
-    plt.xlabel('ref_mag')
-    plt.ylabel(f'{flux_type}_mag - ref_mag')
-    plt.ylim(ymin, ymax)
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
-    xmin, xmax = plt.axis()[:2]
+        max_offset *= 1e3*1.2
+        xy_range = (-max_offset, max_offset)
+        plt.hexbin(dra, ddec, mincnt=1)
+        plt.xlabel('RA offset (mas)')
+        plt.ylabel('Dec offset (mas)')
+        plt.xlim(*xy_range)
+        plt.ylim(*xy_range)
 
-    fig.add_subplot(2, 2, 3)
+        nullfmt = NullFormatter()
+
+        ax_ra = ax.twinx()
+        ax_ra.yaxis.set_major_formatter(nullfmt)
+        ax_ra.yaxis.set_ticks([])
+        bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
+                              density=True, color='red')
+        ax_ra.set_ylim(0, 2.3*np.max(bins))
+
+        ax_dec = ax.twiny()
+        ax_dec.xaxis.set_major_formatter(nullfmt)
+        ax_dec.xaxis.set_ticks([])
+        bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
+                              density=True, color='red',
+                              orientation='horizontal')
+        ax_dec.set_xlim(0, 2.3*np.max(bins))
+
+        plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
+                     xycoords='axes fraction', horizontalalignment='left')
+
+        plt.title(f'v{visit}-{band}')
+        plt.colorbar()
+
+    if not skip_plots:
+        fig.add_subplot(2, 2, 2)
+        bins = 20
+        delta_mag = df['src_mag'] - df['ref_mag']
+        dmag_med = np.nanmedian(delta_mag)
+        ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
+        plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
+        plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
+                          bins=20)
+        plt.xlabel('ref_mag')
+        plt.ylabel(f'{flux_type}_mag - ref_mag')
+        plt.ylim(ymin, ymax)
+        plt.title(f'v{visit}-{band}')
+        plt.colorbar()
+        xmin, xmax = plt.axis()[:2]
+
     T = (df['base_SdssShape_xx'] + df['base_SdssShape_yy'])*0.2**2
     tmed = np.nanmedian(T)
-    ymin, ymax = tmed - 0.1, tmed + 0.1
-    plt.hexbin(df['ref_mag'], T, mincnt=1, extent=(xmin, xmax, ymin, ymax))
-    plot_binned_stats(df['ref_mag'], T, x_range=plt.axis()[:2], bins=20)
-    plt.xlabel('ref_mag')
-    plt.ylabel('T (arcsec**2)')
-    plt.ylim(ymin, ymax)
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
+    if not skip_plots:
+        fig.add_subplot(2, 2, 3)
+        ymin, ymax = tmed - 0.1, tmed + 0.1
+        plt.hexbin(df['ref_mag'], T, mincnt=1, extent=(xmin, xmax, ymin, ymax))
+        plot_binned_stats(df['ref_mag'], T, x_range=plt.axis()[:2], bins=20)
+        plt.xlabel('ref_mag')
+        plt.ylabel('T (arcsec**2)')
+        plt.ylim(ymin, ymax)
+        plt.title(f'v{visit}-{band}')
+        plt.colorbar()
 
-    ax1 = fig.add_subplot(2, 2, 4)
     x_range = (12, 26)
-    plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
-    plt.title(f'v{visit}-{band}')
+    if not skip_plots:
+        ax1 = fig.add_subplot(2, 2, 4)
+        plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
+        plt.title(f'v{visit}-{band}')
 
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('S/N', color='red')
+        ax2 = ax1.twinx()
+        ax2.set_ylabel('S/N', color='red')
+
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
     ref_mags, SNR_values, _ = plot_binned_stats(df['ref_mag'], snr,
                                                 x_range=x_range, bins=20,
-                                                color='red')
+                                                color='red',
+                                                skip_plots=skip_plots)
     m5, mag_func = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
-    plt.xlim(*x_range)
+    if not skip_plots:
+        plt.xlim(*x_range)
 
-    plt.yscale('log')
-    ymin, ymax = 1, plt.axis()[-1]
-    plt.ylim(ymin, ymax)
-    plt.axhline(5, linestyle=':', color='red')
-    yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
-    plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
-    if opsim_db is not None:
-        plt.axvline(get_five_sigma_depth(opsim_db, visit),
-                    linestyle='--', color='red')
+        plt.yscale('log')
+        ymin, ymax = 1, plt.axis()[-1]
+        plt.ylim(ymin, ymax)
+        plt.axhline(5, linestyle=':', color='red')
+        yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
+        plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
+        if opsim_db is not None:
+            plt.axvline(get_five_sigma_depth(opsim_db, visit),
+                        linestyle='--', color='red')
 
-    plt.tight_layout()
-    outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
-    plt.savefig(outfile)
+        plt.tight_layout()
+        outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
     # Make plot of psf_mag - calib_mag distribution.
-    fig = plt.figure(figsize=(6, 4))
     dmag_calib_median = psf_mag_check(repo, visit, sn_min=sn_min)
-    plt.title(f'v{visit}-{band}')
-    outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
-    plt.savefig(outfile)
+    if not skip_plots:
+        fig = plt.figure(figsize=(6, 4))
+        plt.title(f'v{visit}-{band}')
+        outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
     # Make plot of psf_mag - ref_mag distribution.
     my_df = df.query('base_PsfFlux_instFlux/base_PsfFlux_instFluxErr'
                      f' > {sn_min}')
-    fig = plt.figure(figsize=(6, 4))
+    if not skip_plots:
+        fig = plt.figure(figsize=(6, 4))
     dmag_ref_median = plot_dmags(my_df['src_mag'], my_df['ref_mag'],
-                                 sn_min=sn_min)
-    plt.title(f'v{visit}-{band}')
-    outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
-    plt.savefig(outfile)
+                                 sn_min=sn_min, skip_plots=skip_plots)
+    if not skip_plots:
+        plt.title(f'v{visit}-{band}')
+        outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
-    # Make psf whisker plot.
-    psf_whisker_plot(butler, visit)
-    outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
-    plt.savefig(outfile)
+        # Make psf whisker plot.
+        psf_whisker_plot(butler, visit)
+        outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
     df = pd.DataFrame(data=dict(visit=[visit], ast_offset=[median_offset],
                                 dmag_ref_median=[dmag_ref_median],
