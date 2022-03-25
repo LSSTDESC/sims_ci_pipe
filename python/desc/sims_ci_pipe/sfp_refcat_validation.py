@@ -31,14 +31,15 @@ class RefCat:
     Class to provide access to sky cone selected reference catalog data
     for DC2.
     """
-    def __init__(self, butler):
+    def __init__(self, butler, dstype='cal_ref_cat_2_2'):
         """
         Parameters
         ----------
-        butler: lsst.daf.persistence.Butler
+        butler: lsst.daf.butler.Butler
             Butler pointing to the data repo with the processed visits.
         """
         self.butler = butler
+        self.dstype = dstype
         self._ref_task = None
 
     @property
@@ -48,7 +49,7 @@ class RefCat:
         """
         if self._ref_task is None:
             registry = self.butler.registry
-            dsrefs = registry.queryDatasets('cal_ref_cat')
+            dsrefs = registry.queryDatasets(self.dstype)
             refCats = [daf_butler.DeferredDatasetHandle(self.butler, _, {})
                        for _ in dsrefs]
             dataIds = [registry.expandDataId(_.dataId) for _ in dsrefs]
@@ -101,17 +102,19 @@ class RefCat:
         return self.ref_task.loadSkyCircle(centerCoord, radius, band).refCat
 
 
-def point_source_matches(dataref, ref_cat0, max_offset=0.1,
+def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
                          src_columns=(), ref_columns=(),
                          flux_type='base_PsfFlux'):
     """
-    Match point sources between a reference catalog and the dataref
+    Match point sources between a reference catalog and the dataset ref
     pointing to a src catalog.
 
     Parameters
     ----------
-    dataref: lsst.daf.persistence.butlerSubset.ButlerDataref
-        Dataref pointing to the desired sensor-visit.
+    dsref: lsst.daf.butler.DatasetRef
+        DatasetRef pointing to the desired sensor-visit.
+    butler: lsst.daf.butler.Butler
+        Butler pointing to the data repo with the processed visits.
     ref_cat0: lsst.afw.table.SimpleCatalog
         The reference catalog.
     max_offset: float [0.1]
@@ -129,8 +132,8 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     pandas.DataFrame
     """
     flux_col = f'{flux_type}_instFlux'
-    src0 = dataref.butler.get('src', dataId=dataref.dataId)
-    band = dataref.dataId['band']
+    src0 = butler.get('src', dataId=dsref.dataId)
+    band = dsref.dataId['band']
 
     # Apply point source selections to the source catalog.
     ext = src0.get('base_ClassificationExtendedness_value')
@@ -148,14 +151,14 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     matches = afw_table.matchRaDec(ref_cat, src, radius)
     num_matches = len(matches)
 
-    offsets = np.zeros(num_matches, dtype=np.float)
-    ref_ras = np.zeros(num_matches, dtype=np.float)
-    ref_decs = np.zeros(num_matches, dtype=np.float)
-    ref_mags = np.zeros(num_matches, dtype=np.float)
-    src_mags = np.zeros(num_matches, dtype=np.float)
+    offsets = np.zeros(num_matches, dtype=float)
+    ref_ras = np.zeros(num_matches, dtype=float)
+    ref_decs = np.zeros(num_matches, dtype=float)
+    ref_mags = np.zeros(num_matches, dtype=float)
+    src_mags = np.zeros(num_matches, dtype=float)
     ref_data = defaultdict(list)
     src_data = defaultdict(list)
-    calib = dataref.butler.get('calexp', dataId=dataref.dataId).getPhotoCalib()
+    calib = butler.get('calexp', dataId=dsref.dataId).getPhotoCalib()
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
         ref_mags[i] = match.first[f'lsst_{band}']
@@ -193,32 +196,33 @@ def visit_ptsrc_matches(butler, visit, band, center_radec, src_columns=None,
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
                        f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
-    datarefs = butler.registry.queryDatasets('src', visit=visit,
+    dsrefs = butler.registry.queryDatasets('src', visit=visit,
                                              findFirst=True)
     ref_cat = get_ref_cat(butler, visit, band, center_radec)
     df = None
     detectors = set()
-    for i, dataref in enumerate(datarefs):
-        detector = dataref.dataId['detector']
+    for i, dsref in enumerate(dsrefs):
+        detector = dsref.dataId['detector']
         if detector in detectors:
             continue
         detectors.add(detector)
         try:
             my_df = point_source_matches(
-                daf_butler.DeferredDatasetHandle(butler, dataref, None),
+                daf_butler.DeferredDatasetHandle(butler, dsref, None),
+                butler,
                 ref_cat,
                 max_offset=max_offset,
                 src_columns=src_columns,
                 flux_type=flux_type)
         except afw_fits.FitsError:
-            print("FitsError raised reading sfp data for", dataref.dataId)
+            print("FitsError raised reading sfp data for", dsref.dataId)
             print(eobj)
         else:
-            print(i, dataref.dataId)
+            print(i, dsref.dataId)
             if df is None:
                 df = my_df
             else:
-                df = df.append(my_df, ignore_index=True)
+                df = pd.concat([df, my_df], ignore_index=True)
     return df
 
 
@@ -303,10 +307,10 @@ def get_center_radec(butler, visit, opsim_db=None):
 
     # Return the center of detector=94, if it's available.
     ref_cat = RefCat(butler)
-    datarefs = butler.registry.queryDatasets('calexp', visit=visit,
+    dsrefs = butler.registry.queryDatasets('calexp', visit=visit,
                                              findFirst=True)
     dataId = dict()
-    dataId.update(list(datarefs)[0].dataId)
+    dataId.update(list(dsrefs)[0].dataId)
     dataId['detector'] = 94
     try:
         ccd_center = ref_cat.ccd_center(dataId)
@@ -319,11 +323,11 @@ def get_center_radec(butler, visit, opsim_db=None):
     # Detector 94 isn't available, so loop over all available CCDs and use
     # the medians in ra, dec of the coordinate centers.
     ras, decs = [], []
-    for dataref in datarefs:
+    for dsref in dsrefs:
         try:
-            ccd_center = ref_cat.ccd_center(dataref.dataId)
+            ccd_center = ref_cat.ccd_center(dsref.dataId)
         except afw_fits.FitsError:
-            print("FitsError raised reading sfp data for", dataref.dataId)
+            print("FitsError raised reading sfp data for", dsref.dataId)
             print(eobj)
         except:
             pass
@@ -341,17 +345,17 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
     band = None
-    datarefs = butler.registry.queryDatasets('src', visit=visit,
+    dsrefs = butler.registry.queryDatasets('src', visit=visit,
                                              findFirst=True)
-    for dataref in datarefs:
+    for dsref in dsrefs:
         try:
-            src = butler.get(dataref)
+            src = butler.get(dsref)
         except afw_fits.FitsError:
-            print("FitsError raised reading sfp data for", dataref.dataId)
+            print("FitsError raised reading sfp data for", dsref.dataId)
             print(eobj)
             continue
         if band is None:
-            band = get_band(butler, dataref)
+            band = get_band(butler, dsref)
         # Apply point source selections to the source catalog.
         ext = src.get('base_ClassificationExtendedness_value')
         model_flag = src.get(f'{flux_type}_flag')
