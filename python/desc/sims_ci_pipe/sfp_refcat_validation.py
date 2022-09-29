@@ -13,11 +13,12 @@ import healpy as hp
 import lsst.afw.fits as afw_fits
 import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
-import lsst.daf.persistence as dp
-from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask
+import lsst.daf.butler as daf_butler
+from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask, \
+    ReferenceObjectLoader
 from .psf_mag_check import psf_mag_check
 from .psf_whisker_plot import psf_whisker_plot
-
+from .get_point_sources import get_band
 
 __all__ = ['RefCat', 'point_source_matches', 'visit_ptsrc_matches',
            'make_depth_map', 'plot_binned_stats', 'get_center_radec',
@@ -30,14 +31,15 @@ class RefCat:
     Class to provide access to sky cone selected reference catalog data
     for DC2.
     """
-    def __init__(self, butler):
+    def __init__(self, butler, dstype='cal_ref_cat_2_2'):
         """
         Parameters
         ----------
-        butler: lsst.daf.persistence.Butler
+        butler: lsst.daf.butler.Butler
             Butler pointing to the data repo with the processed visits.
         """
         self.butler = butler
+        self.dstype = dstype
         self._ref_task = None
 
     @property
@@ -46,10 +48,16 @@ class RefCat:
         Handle for the ReferenceObjectsTask.
         """
         if self._ref_task is None:
+            registry = self.butler.registry
+            dsrefs = registry.queryDatasets(self.dstype)
+            refCats = [daf_butler.DeferredDatasetHandle(self.butler, _, {})
+                       for _ in dsrefs]
+            dataIds = [registry.expandDataId(_.dataId) for _ in dsrefs]
             refConfig = LoadIndexedReferenceObjectsTask.ConfigClass()
             refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
-            self._ref_task = LoadIndexedReferenceObjectsTask(self.butler,
-                                                             config=refConfig)
+            self._ref_task = ReferenceObjectLoader(dataIds=dataIds,
+                                                   refCats=refCats,
+                                                   config=refConfig)
         return self._ref_task
 
     def ccd_center(self, dataId):
@@ -94,17 +102,19 @@ class RefCat:
         return self.ref_task.loadSkyCircle(centerCoord, radius, band).refCat
 
 
-def point_source_matches(dataref, ref_cat0, max_offset=0.1,
+def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
                          src_columns=(), ref_columns=(),
                          flux_type='base_PsfFlux'):
     """
-    Match point sources between a reference catalog and the dataref
+    Match point sources between a reference catalog and the dataset ref
     pointing to a src catalog.
 
     Parameters
     ----------
-    dataref: lsst.daf.persistence.butlerSubset.ButlerDataref
-        Dataref pointing to the desired sensor-visit.
+    dsref: lsst.daf.butler.DatasetRef
+        DatasetRef pointing to the desired sensor-visit.
+    butler: lsst.daf.butler.Butler
+        Butler pointing to the data repo with the processed visits.
     ref_cat0: lsst.afw.table.SimpleCatalog
         The reference catalog.
     max_offset: float [0.1]
@@ -122,8 +132,8 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     pandas.DataFrame
     """
     flux_col = f'{flux_type}_instFlux'
-    src0 = dataref.get('src')
-    band = dataref.dataId['filter']
+    src0 = butler.get('src', dataId=dsref.dataId)
+    band = dsref.dataId['band']
 
     # Apply point source selections to the source catalog.
     ext = src0.get('base_ClassificationExtendedness_value')
@@ -131,7 +141,7 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     model_flux = src0.get(flux_col)
     num_children = src0.get('deblend_nChild')
     src = src0.subset((ext == 0) &
-                      (model_flag == False) &
+                      ~model_flag &
                       (model_flux > 0) &
                       (num_children == 0))
 
@@ -141,14 +151,14 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     matches = afw_table.matchRaDec(ref_cat, src, radius)
     num_matches = len(matches)
 
-    offsets = np.zeros(num_matches, dtype=np.float)
-    ref_ras = np.zeros(num_matches, dtype=np.float)
-    ref_decs = np.zeros(num_matches, dtype=np.float)
-    ref_mags = np.zeros(num_matches, dtype=np.float)
-    src_mags = np.zeros(num_matches, dtype=np.float)
+    offsets = np.zeros(num_matches, dtype=float)
+    ref_ras = np.zeros(num_matches, dtype=float)
+    ref_decs = np.zeros(num_matches, dtype=float)
+    ref_mags = np.zeros(num_matches, dtype=float)
+    src_mags = np.zeros(num_matches, dtype=float)
     ref_data = defaultdict(list)
     src_data = defaultdict(list)
-    calib = dataref.get('calexp_photoCalib')
+    calib = butler.get('calexp', dataId=dsref.dataId).getPhotoCalib()
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
         ref_mags[i] = match.first[f'lsst_{band}']
@@ -166,22 +176,18 @@ def point_source_matches(dataref, ref_cat0, max_offset=0.1,
     return pd.DataFrame(data=data)
 
 
-def get_ref_cat(butler, visit, center_radec, radius=2.1):
+def get_ref_cat(butler, visit, band, center_radec, radius=2.1):
     """
     Get the reference catalog for the desired visit for the requested
     sky location and sky cone radius.
     """
     ref_cats = RefCat(butler)
-    try:
-        band = list(butler.subset('src', visit=visit))[0].dataId['filter']
-    except dp.butlerExceptions.NoResults:
-        band = list(butler.subset('src', expId=visit))[0].dataId['filter']
     centerCoord = lsst_geom.SpherePoint(center_radec[0]*lsst_geom.degrees,
                                         center_radec[1]*lsst_geom.degrees)
     return ref_cats(centerCoord, band, radius)
 
 
-def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
+def visit_ptsrc_matches(butler, visit, band, center_radec, src_columns=None,
                         max_offset=0.1, flux_type='base_PsfFlux'):
     """
     Perform point source matching on each dataref/sensor in a visit.
@@ -190,29 +196,33 @@ def visit_ptsrc_matches(butler, visit, center_radec, src_columns=None,
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
                        f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
-    try:
-        datarefs = butler.subset('src', visit=visit)
-    except dp.butlerExceptions.NoResults:
-        datarefs = butler.subset('src', expId=visit)
-    ref_cat = get_ref_cat(butler, visit, center_radec)
+    dsrefs = butler.registry.queryDatasets('src', visit=visit,
+                                             findFirst=True)
+    ref_cat = get_ref_cat(butler, visit, band, center_radec)
     df = None
-    for i, dataref in enumerate(datarefs):
+    detectors = set()
+    for i, dsref in enumerate(dsrefs):
+        detector = dsref.dataId['detector']
+        if detector in detectors:
+            continue
+        detectors.add(detector)
         try:
-            my_df = point_source_matches(dataref, ref_cat,
-                                         max_offset=max_offset,
-                                         src_columns=src_columns,
-                                         flux_type=flux_type)
-        except dp.butlerExceptions.NoResults:
-            pass
+            my_df = point_source_matches(
+                daf_butler.DeferredDatasetHandle(butler, dsref, None),
+                butler,
+                ref_cat,
+                max_offset=max_offset,
+                src_columns=src_columns,
+                flux_type=flux_type)
         except afw_fits.FitsError:
-            print("FitsError raised reading sfp data for", dataref.dataId)
+            print("FitsError raised reading sfp data for", dsref.dataId)
             print(eobj)
         else:
-            print(i, dataref.dataId)
+            print(i, dsref.dataId)
             if df is None:
                 df = my_df
             else:
-                df = df.append(my_df, ignore_index=True)
+                df = pd.concat([df, my_df], ignore_index=True)
     return df
 
 
@@ -246,7 +256,8 @@ def make_depth_map(df, nside=128, snr_bounds=None):
     return map_out
 
 
-def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
+def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red',
+                      skip_plots=False):
     """
     Plot the median of the values corresponding to the binned x values.
     Errors on the median are derived from the stdev of values.
@@ -260,7 +271,8 @@ def plot_binned_stats(x, values, x_range=None, bins=50, fmt='.', color='red'):
     x_vals = (edges[1:] + edges[:-1])[index]/2.
     y_vals = binned_values['median'][index]
     yerr = binned_values['std'][index]/np.sqrt(binned_values['count'][index])
-    plt.errorbar(x_vals, y_vals, yerr=yerr, fmt=fmt, color=color)
+    if not skip_plots:
+        plt.errorbar(x_vals, y_vals, yerr=yerr, fmt=fmt, color=color)
     return x_vals, y_vals, yerr
 
 
@@ -293,36 +305,32 @@ def get_center_radec(butler, visit, opsim_db=None):
         return (np.degrees(df.iloc[0].descDitheredRA),
                 np.degrees(df.iloc[0].descDitheredDec))
 
-    # Return the center of R22_S11, if it's available.
+    # Return the center of detector=94, if it's available.
     ref_cat = RefCat(butler)
-    try:
-        datarefs = butler.subset('calexp', visit=visit)
-    except dp.butlerExceptions.NoResults:
-        datarefs = butler.subset('calexp', expId=visit)
+    dsrefs = butler.registry.queryDatasets('calexp', visit=visit,
+                                             findFirst=True)
     dataId = dict()
-    dataId.update(list(datarefs)[0].dataId)
-    dataId['raftName'] = 'R22'
-    dataId['detectorName'] = 'S11'
-    dataId.pop('detector')
+    dataId.update(list(dsrefs)[0].dataId)
+    dataId['detector'] = 94
     try:
         ccd_center = ref_cat.ccd_center(dataId)
-    except dp.butlerExceptions.NoResults as eobj:
+    except Exception as eobj:
         print(eobj)
     else:
         return (ccd_center.getLongitude().asDegrees(),
                 ccd_center.getLatitude().asDegrees())
 
-    # R22_S11 isn't available, so loop over all available CCDs and use
+    # Detector 94 isn't available, so loop over all available CCDs and use
     # the medians in ra, dec of the coordinate centers.
     ras, decs = [], []
-    for dataref in datarefs:
+    for dsref in dsrefs:
         try:
-            ccd_center = ref_cat.ccd_center(dataref.dataId)
-        except dp.butlerExceptions.NoResults:
-            pass
+            ccd_center = ref_cat.ccd_center(dsref.dataId)
         except afw_fits.FitsError:
-            print("FitsError raised reading sfp data for", dataref.dataId)
+            print("FitsError raised reading sfp data for", dsref.dataId)
             print(eobj)
+        except:
+            pass
         else:
             ras.append(ccd_center.getLongitude())
             decs.append(ccd_center.getLatitude())
@@ -337,21 +345,17 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
     band = None
-    try:
-        datarefs = butler.subset('src', visit=visit)
-    except dp.butlerExceptions.NoResults:
-        datarefs = butler.subset('src', expId=visit)
-    for dataref in datarefs:
+    dsrefs = butler.registry.queryDatasets('src', visit=visit,
+                                             findFirst=True)
+    for dsref in dsrefs:
         try:
-            src = dataref.get('src')
-        except dp.butlerExceptions.NoResults:
-            continue
+            src = butler.get(dsref)
         except afw_fits.FitsError:
-            print("FitsError raised reading sfp data for", dataref.dataId)
+            print("FitsError raised reading sfp data for", dsref.dataId)
             print(eobj)
             continue
         if band is None:
-            band = dataref.dataId['filter']
+            band = get_band(butler, dsref)
         # Apply point source selections to the source catalog.
         ext = src.get('base_ClassificationExtendedness_value')
         model_flag = src.get(f'{flux_type}_flag')
@@ -360,7 +364,7 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
         coord_ra = src.get('coord_ra')
         coord_dec = src.get('coord_dec')
         index = ((ext == 0) &
-                 (model_flag == False) &
+                 ~model_flag &
                  (model_flux > 0) &
                  (num_children == 0))
         src_ra.extend(coord_ra[index])
@@ -423,7 +427,7 @@ def extrapolate_nsigma(ref_mag, SNR, nsigma=5):
 
 
 def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
-               dmag_range=(-0.05, 0.05)):
+               dmag_range=(-0.05, 0.05), skip_plots=False):
     """
     Plot delta mag distribution.
 
@@ -446,6 +450,8 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
     """
     delta_mag = psf_mags - ref_mags
     dmag_median = np.median(delta_mag)
+    if skip_plots:
+        return dmag_median
     plt.hist(delta_mag, range=dmag_range, bins=100, histtype='step',
              density=True)
     plt.axvline(0, linestyle=':')
@@ -459,7 +465,8 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
 
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                          opsim_db=None, figsize=(12, 10), max_offset=0.1,
-                         sn_min=150):
+                         sn_min=150, instrument='LSSTCam-imSim',
+                         collections=None, skip_plots=False):
     """
     Create the single-frame validation plots.
 
@@ -492,144 +499,162 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         (median astrometric offset, median delta magitude, median T value,
          extrapolated five sigma depth)
     """
-    butler = dp.Butler(repo)
+    if collections is None:
+        butler = daf_butler.Butler(repo)
+        collections = list(butler.registry.queryCollections())
+
+    butler = daf_butler.Butler(repo, collections=collections)
+
     try:
-        try:
-            band = list(butler.subset('src', visit=visit))[0].dataId['filter']
-        except dp.butlerExceptions.NoResults:
-            band = list(butler.subset('src', expId=visit))[0].dataId['filter']
+        dsrefs = list(butler.registry.queryDatasets('src', visit=visit,
+                                                    instrument=instrument,
+                                                    collections=collections,
+                                                    findFirst=True))
+        band = get_band(butler, dsrefs[0])
     except Exception as eobj:
         print('visit:', visit)
         print(eobj)
         raise eobj
     center_radec = get_center_radec(butler, visit, opsim_db)
-    ref_cat = get_ref_cat(butler, visit, center_radec)
+    ref_cat = get_ref_cat(butler, visit, band, center_radec)
 
     os.makedirs(outdir, exist_ok=True)
     pickle_file = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.pkl')
 
     if not os.path.isfile(pickle_file):
-        df = visit_ptsrc_matches(butler, visit, center_radec,
+        df = visit_ptsrc_matches(butler, visit, band, center_radec,
                                  max_offset=max_offset)
         df.to_pickle(pickle_file)
     else:
         df = pd.read_pickle(pickle_file)
 
-    fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(2, 2, 1)
-
-    coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
-    coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
-    dra = np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))*3600*1000
-    ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
-
-    max_offset *= 1e3*1.2
-    xy_range = (-max_offset, max_offset)
-    plt.hexbin(dra, ddec, mincnt=1)
-    plt.xlabel('RA offset (mas)')
-    plt.ylabel('Dec offset (mas)')
-    plt.xlim(*xy_range)
-    plt.ylim(*xy_range)
-
-    nullfmt = NullFormatter()
-
-    ax_ra = ax.twinx()
-    ax_ra.yaxis.set_major_formatter(nullfmt)
-    ax_ra.yaxis.set_ticks([])
-    bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
-                          density=True, color='red')
-    ax_ra.set_ylim(0, 2.3*np.max(bins))
-
-    ax_dec = ax.twiny()
-    ax_dec.xaxis.set_major_formatter(nullfmt)
-    ax_dec.xaxis.set_ticks([])
-    bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
-                          density=True, color='red', orientation='horizontal')
-    ax_dec.set_xlim(0, 2.3*np.max(bins))
-
     median_offset = np.median(df['offset'])
-    plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
-                 xycoords='axes fraction', horizontalalignment='left')
+    if not skip_plots:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(2, 2, 1)
 
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
+        coord_ra = np.array([_.asRadians() for _ in df['coord_ra']])
+        coord_dec = np.array([_.asRadians() for _ in df['coord_dec']])
+        dra = (np.degrees((df['ref_ra'] - coord_ra)*np.cos(df['ref_dec']))
+               *3600*1000)
+        ddec = np.degrees((df['ref_dec'] - coord_dec))*3600*1000
 
-    fig.add_subplot(2, 2, 2)
-    bins = 20
-    delta_mag = df['src_mag'] - df['ref_mag']
-    dmag_med = np.nanmedian(delta_mag)
-    ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
-    plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
-    plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
-                      bins=20)
-    plt.xlabel('ref_mag')
-    plt.ylabel(f'{flux_type}_mag - ref_mag')
-    plt.ylim(ymin, ymax)
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
-    xmin, xmax = plt.axis()[:2]
+        max_offset *= 1e3*1.2
+        xy_range = (-max_offset, max_offset)
+        plt.hexbin(dra, ddec, mincnt=1)
+        plt.xlabel('RA offset (mas)')
+        plt.ylabel('Dec offset (mas)')
+        plt.xlim(*xy_range)
+        plt.ylim(*xy_range)
 
-    fig.add_subplot(2, 2, 3)
+        nullfmt = NullFormatter()
+
+        ax_ra = ax.twinx()
+        ax_ra.yaxis.set_major_formatter(nullfmt)
+        ax_ra.yaxis.set_ticks([])
+        bins, _, _ = plt.hist(dra, bins=50, histtype='step', range=xy_range,
+                              density=True, color='red')
+        ax_ra.set_ylim(0, 2.3*np.max(bins))
+
+        ax_dec = ax.twiny()
+        ax_dec.xaxis.set_major_formatter(nullfmt)
+        ax_dec.xaxis.set_ticks([])
+        bins, _, _ = plt.hist(ddec, bins=50, histtype='step', range=xy_range,
+                              density=True, color='red',
+                              orientation='horizontal')
+        ax_dec.set_xlim(0, 2.3*np.max(bins))
+
+        plt.annotate(f'{median_offset:.1f} mas median offset', (0.5, 0.95),
+                     xycoords='axes fraction', horizontalalignment='left')
+
+        plt.title(f'v{visit}-{band}')
+        plt.colorbar()
+
+    if not skip_plots:
+        fig.add_subplot(2, 2, 2)
+        bins = 20
+        delta_mag = df['src_mag'] - df['ref_mag']
+        dmag_med = np.nanmedian(delta_mag)
+        ymin, ymax = dmag_med - 0.5, dmag_med + 0.5
+        plt.hexbin(df['ref_mag'], delta_mag, mincnt=1)
+        plot_binned_stats(df['ref_mag'], delta_mag, x_range=plt.axis()[:2],
+                          bins=20)
+        plt.xlabel('ref_mag')
+        plt.ylabel(f'{flux_type}_mag - ref_mag')
+        plt.ylim(ymin, ymax)
+        plt.title(f'v{visit}-{band}')
+        plt.colorbar()
+        xmin, xmax = plt.axis()[:2]
+
     T = (df['base_SdssShape_xx'] + df['base_SdssShape_yy'])*0.2**2
     tmed = np.nanmedian(T)
-    ymin, ymax = tmed - 0.1, tmed + 0.1
-    plt.hexbin(df['ref_mag'], T, mincnt=1, extent=(xmin, xmax, ymin, ymax))
-    plot_binned_stats(df['ref_mag'], T, x_range=plt.axis()[:2], bins=20)
-    plt.xlabel('ref_mag')
-    plt.ylabel('T (arcsec**2)')
-    plt.ylim(ymin, ymax)
-    plt.title(f'v{visit}-{band}')
-    plt.colorbar()
+    if not skip_plots:
+        fig.add_subplot(2, 2, 3)
+        ymin, ymax = tmed - 0.1, tmed + 0.1
+        plt.hexbin(df['ref_mag'], T, mincnt=1, extent=(xmin, xmax, ymin, ymax))
+        plot_binned_stats(df['ref_mag'], T, x_range=plt.axis()[:2], bins=20)
+        plt.xlabel('ref_mag')
+        plt.ylabel('T (arcsec**2)')
+        plt.ylim(ymin, ymax)
+        plt.title(f'v{visit}-{band}')
+        plt.colorbar()
 
-    ax1 = fig.add_subplot(2, 2, 4)
     x_range = (12, 26)
-    plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
-    plt.title(f'v{visit}-{band}')
+    if not skip_plots:
+        ax1 = fig.add_subplot(2, 2, 4)
+        plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
+        plt.title(f'v{visit}-{band}')
 
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('S/N', color='red')
+        ax2 = ax1.twinx()
+        ax2.set_ylabel('S/N', color='red')
+
     snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
     ref_mags, SNR_values, _ = plot_binned_stats(df['ref_mag'], snr,
                                                 x_range=x_range, bins=20,
-                                                color='red')
+                                                color='red',
+                                                skip_plots=skip_plots)
     m5, mag_func = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
-    plt.xlim(*x_range)
+    if not skip_plots:
+        plt.xlim(*x_range)
 
-    plt.yscale('log')
-    ymin, ymax = 1, plt.axis()[-1]
-    plt.ylim(ymin, ymax)
-    plt.axhline(5, linestyle=':', color='red')
-    yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
-    plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
-    if opsim_db is not None:
-        plt.axvline(get_five_sigma_depth(opsim_db, visit),
-                    linestyle='--', color='red')
+        plt.yscale('log')
+        ymin, ymax = 1, plt.axis()[-1]
+        plt.ylim(ymin, ymax)
+        plt.axhline(5, linestyle=':', color='red')
+        yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
+        plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
+        if opsim_db is not None:
+            plt.axvline(get_five_sigma_depth(opsim_db, visit),
+                        linestyle='--', color='red')
 
-    plt.tight_layout()
-    outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
-    plt.savefig(outfile)
+        plt.tight_layout()
+        outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
     # Make plot of psf_mag - calib_mag distribution.
-    fig = plt.figure(figsize=(6, 4))
     dmag_calib_median = psf_mag_check(repo, visit, sn_min=sn_min)
-    plt.title(f'v{visit}-{band}')
-    outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
-    plt.savefig(outfile)
+    if not skip_plots:
+        fig = plt.figure(figsize=(6, 4))
+        plt.title(f'v{visit}-{band}')
+        outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
     # Make plot of psf_mag - ref_mag distribution.
     my_df = df.query('base_PsfFlux_instFlux/base_PsfFlux_instFluxErr'
                      f' > {sn_min}')
-    fig = plt.figure(figsize=(6, 4))
+    if not skip_plots:
+        fig = plt.figure(figsize=(6, 4))
     dmag_ref_median = plot_dmags(my_df['src_mag'], my_df['ref_mag'],
-                                 sn_min=sn_min)
-    plt.title(f'v{visit}-{band}')
-    outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
-    plt.savefig(outfile)
+                                 sn_min=sn_min, skip_plots=skip_plots)
+    if not skip_plots:
+        plt.title(f'v{visit}-{band}')
+        outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
-    # Make psf whisker plot.
-    psf_whisker_plot(butler, visit)
-    outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
-    plt.savefig(outfile)
+        # Make psf whisker plot.
+        psf_whisker_plot(butler, visit)
+        outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
+        plt.savefig(outfile)
 
     df = pd.DataFrame(data=dict(visit=[visit], ast_offset=[median_offset],
                                 dmag_ref_median=[dmag_ref_median],

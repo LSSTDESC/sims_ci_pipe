@@ -3,12 +3,11 @@ Module to produce PSF ellipticity plots.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-import lsst.daf.persistence as dp
+import lsst.daf.butler as daf_butler
 from .opsim_db_interface import OpSimDb
+from .get_point_sources import get_point_sources, get_band
 
-
-__all__ = ['get_point_sources', 'plot_ellipticities',
-           'ellipticity_distributions']
+__all__ = ['plot_ellipticities', 'ellipticity_distributions']
 
 
 def asymQ(ixx, iyy, ixy):
@@ -33,24 +32,6 @@ def get_e(ixx, iyy, ixy):
     a = get_a(ixx, iyy, ixy)
     b = get_b(ixx, iyy, ixy)
     return (a**2 - b**2)/(a**2 + b**2)
-
-
-def get_point_sources(src, flux_type='base_PsfFlux', min_snr=None, flags=()):
-    ext = src.get('base_ClassificationExtendedness_value')
-    model_flag = src.get(f'{flux_type}_flag')
-    model_flux = src.get(f'{flux_type}_instFlux')
-    num_children = src.get('deblend_nChild')
-    snr = model_flux/src.get(f'{flux_type}_instFluxErr')
-    condition = ((ext == 0) &
-                 (model_flag == False) &
-                 (model_flux > 0) &
-                 (num_children == 0))
-    for flag in flags:
-        values = src.get(flag)
-        condition &= (values == True)
-    if min_snr is not None:
-        condition &= (snr >= min_snr)
-    return src.subset(condition).copy(deep=True)
 
 
 def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
@@ -92,8 +73,10 @@ def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
         datarefs = butler.subset('src', visit=int(visit))
         for i, dataref in enumerate(datarefs):
             try:
-                src = get_point_sources(dataref.get('src'))
-            except dp.butlerExceptions.NoResults:
+                src = get_point_sources(
+                    dataref.butler.get('src', dataId=dataref.dataid))
+            except Exception as eobj:
+                print('plot_ellipticities:', eobj)
                 continue
             for record in src:
                 ellipticities.append(get_e(record['base_SdssShape_psf_xx'],
@@ -116,15 +99,21 @@ def plot_ellipticities(butler, visits, opsim_db_file=None, min_altitude=80.,
 
 
 def ellipticity_distributions(repo, visit=None, outfile=None, opsim_db=None,
-                              figsize=(5, 8)):
+                              collections=None,
+                              instrument='LSSTCam-imSim', figsize=(5, 8)):
     """Plot the ellipticity distributions for r- and i-band."""
-    butler = dp.Butler(repo)
+    if collections is None:
+        butler = daf_butler.Butler(repo)
+        collections = list(butler.registry.queryCollections())
+    butler = daf_butler.Butler(repo, collections=collections)
     fig = plt.figure(figsize=figsize)
     if visit is not None:
         # Explicitly set opsim_db_file to None to avoid selection on
         # altitude and seeing.
         plot_ellipticities(butler, [visit], opsim_db_file=None)
-        band = list(butler.subset('calexp', visit=visit))[0].dataId['filter']
+        dsref = list(butler.registry.queryDatasets('raw', visit=visit,
+                                                   instrument=instrument))[0]
+        band = get_band(butler, dsref)
         plt.title(f'Run2.2i, {band}-band, visit {visit}')
     else:
         for i, band in enumerate(('r', 'i')):
