@@ -14,7 +14,7 @@ import lsst.afw.fits as afw_fits
 import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
 import lsst.daf.butler as daf_butler
-from lsst.meas.algorithms import LoadIndexedReferenceObjectsTask, \
+from lsst.meas.algorithms import LoadReferenceObjectsTask, \
     ReferenceObjectLoader
 from .psf_mag_check import psf_mag_check
 from .psf_whisker_plot import psf_whisker_plot
@@ -53,7 +53,7 @@ class RefCat:
             refCats = [daf_butler.DeferredDatasetHandle(self.butler, _, {})
                        for _ in dsrefs]
             dataIds = [registry.expandDataId(_.dataId) for _ in dsrefs]
-            refConfig = LoadIndexedReferenceObjectsTask.ConfigClass()
+            refConfig = LoadReferenceObjectsTask.ConfigClass()
             refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
             self._ref_task = ReferenceObjectLoader(dataIds=dataIds,
                                                    refCats=refCats,
