@@ -523,7 +523,7 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
 
     if not os.path.isfile(pickle_file):
         df = visit_ptsrc_matches(butler, visit, band, center_radec,
-                                 max_offset=max_offset)
+                                 max_offset=max_offset, flux_type=flux_type)
         df.to_pickle(pickle_file)
     else:
         df = pd.read_pickle(pickle_file)
@@ -608,7 +608,7 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         ax2 = ax1.twinx()
         ax2.set_ylabel('S/N', color='red')
 
-    snr = df['base_PsfFlux_instFlux']/df['base_PsfFlux_instFluxErr']
+    snr = df[f'{flux_type}_instFlux']/df[f'{flux_type}_instFluxErr']
     ref_mags, SNR_values, _ = plot_binned_stats(df['ref_mag'], snr,
                                                 x_range=x_range, bins=20,
                                                 color='red',
@@ -632,15 +632,16 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         plt.savefig(outfile)
 
     # Make plot of psf_mag - calib_mag distribution.
-    dmag_calib_median = psf_mag_check(repo, visit, sn_min=sn_min)
     if not skip_plots:
         fig = plt.figure(figsize=(6, 4))
+    dmag_calib_median = psf_mag_check(repo, visit, sn_min=sn_min)
+    if not skip_plots:
         plt.title(f'v{visit}-{band}')
         outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
         plt.savefig(outfile)
 
     # Make plot of psf_mag - ref_mag distribution.
-    my_df = df.query('base_PsfFlux_instFlux/base_PsfFlux_instFluxErr'
+    my_df = df.query(f'{flux_type}_instFlux/{flux_type}_instFluxErr'
                      f' > {sn_min}')
     if not skip_plots:
         fig = plt.figure(figsize=(6, 4))

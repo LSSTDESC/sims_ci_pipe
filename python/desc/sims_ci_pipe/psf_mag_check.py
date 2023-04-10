@@ -34,7 +34,7 @@ def get_psf_calib_mags(butler, visit, sn_min=150):
     calib_mags = []
     psf_fluxes = []
     psf_fluxErrs = []
-    for dataref in list(datarefs):
+    for dataref in list(set(datarefs)):
         try:
             src = butler.get(dataref)
             photoCalib = butler.get('calexp', dataId=dataref.dataId)\
