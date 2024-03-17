@@ -4,6 +4,7 @@ Module to create single frame processing validation plots.
 import os
 from collections import defaultdict
 import sqlite3
+from astropy import units
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import NullFormatter
@@ -14,8 +15,7 @@ import lsst.afw.fits as afw_fits
 import lsst.afw.table as afw_table
 import lsst.geom as lsst_geom
 import lsst.daf.butler as daf_butler
-from lsst.meas.algorithms import LoadReferenceObjectsTask, \
-    ReferenceObjectLoader
+from lsst.meas.algorithms import ReferenceObjectLoader
 from .psf_mag_check import psf_mag_check
 from .psf_whisker_plot import psf_whisker_plot
 from .get_point_sources import get_band
@@ -31,7 +31,7 @@ class RefCat:
     Class to provide access to sky cone selected reference catalog data
     for DC2.
     """
-    def __init__(self, butler, dstype='cal_ref_cat_2_2'):
+    def __init__(self, butler, dstype='uw_stars_20240130'):
         """
         Parameters
         ----------
@@ -53,8 +53,9 @@ class RefCat:
             refCats = [daf_butler.DeferredDatasetHandle(self.butler, _, {})
                        for _ in dsrefs]
             dataIds = [registry.expandDataId(_.dataId) for _ in dsrefs]
-            refConfig = LoadReferenceObjectsTask.ConfigClass()
-            refConfig.filterMap = {_: f'lsst_{_}_smeared' for _ in 'ugrizy'}
+            refConfig = ReferenceObjectLoader.ConfigClass()
+            refConfig.filterMap =  {"r_03": "lsst_r", "g_03": "lsst_g",
+                                    "i_06": "lsst_i"}
             self._ref_task = ReferenceObjectLoader(dataIds=dataIds,
                                                    refCats=refCats,
                                                    config=refConfig)
@@ -99,7 +100,9 @@ class RefCat:
         lsst.afw.table.SimpleCatalog
         """
         radius = lsst_geom.Angle(radius, lsst_geom.degrees)
-        return self.ref_task.loadSkyCircle(centerCoord, radius, band).refCat
+        filter_names = dict(r='r_03', g='g_03', i='i_06')
+        return self.ref_task.loadSkyCircle(centerCoord, radius,
+                                           filter_names[band]).refCat
 
 
 def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
@@ -134,6 +137,7 @@ def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
     flux_col = f'{flux_type}_instFlux'
     src0 = butler.get('src', dataId=dsref.dataId)
     band = dsref.dataId['band']
+    detector = dsref.dataId['detector']
 
     # Apply point source selections to the source catalog.
     ext = src0.get('base_ClassificationExtendedness_value')
@@ -146,7 +150,8 @@ def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
                       (num_children == 0))
 
     # Match RA, Dec with the reference catalog stars.
-    ref_cat = ref_cat0.subset((ref_cat0.get('resolved') == 0))
+#    ref_cat = ref_cat0.subset((ref_cat0.get('resolved') == 0))
+    ref_cat = ref_cat0
     radius = lsst_geom.Angle(max_offset, lsst_geom.arcseconds)
     matches = afw_table.matchRaDec(ref_cat, src, radius)
     num_matches = len(matches)
@@ -161,7 +166,8 @@ def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
     calib = butler.get('calexp', dataId=dsref.dataId).getPhotoCalib()
     for i, match in enumerate(matches):
         offsets[i] = np.degrees(match.distance)*3600*1000.
-        ref_mags[i] = match.first[f'lsst_{band}']
+        ref_mags[i] = (match.first[f'lsst_{band}_flux']*units.nJy)\
+            .to_value(units.ABmag)
         ref_ras[i] = match.first['coord_ra']
         ref_decs[i] = match.first['coord_dec']
         src_mags[i] = calib.instFluxToMagnitude(match.second[flux_col])
@@ -170,7 +176,7 @@ def point_source_matches(dsref, butler, ref_cat0, max_offset=0.1,
         for src_col in src_columns:
             src_data[src_col].append(match.second[src_col])
     data = dict(offset=offsets, ref_mag=ref_mags, src_mag=src_mags,
-                ref_ra=ref_ras, ref_dec=ref_decs)
+                ref_ra=ref_ras, ref_dec=ref_decs, detector=[detector]*len(offsets))
     data.update(src_data)
     data.update(ref_data)
     return pd.DataFrame(data=data)
@@ -182,6 +188,7 @@ def get_ref_cat(butler, visit, band, center_radec, radius=2.1):
     sky location and sky cone radius.
     """
     ref_cats = RefCat(butler)
+    print(center_radec)
     centerCoord = lsst_geom.SpherePoint(center_radec[0]*lsst_geom.degrees,
                                         center_radec[1]*lsst_geom.degrees)
     return ref_cats(centerCoord, band, radius)
@@ -196,8 +203,7 @@ def visit_ptsrc_matches(butler, visit, band, center_radec, src_columns=None,
         src_columns = ['coord_ra', 'coord_dec',
                        'base_SdssShape_xx', 'base_SdssShape_yy',
                        f'{flux_type}_instFlux', f'{flux_type}_instFluxErr']
-    dsrefs = butler.registry.queryDatasets('src', visit=visit,
-                                             findFirst=True)
+    dsrefs = butler.registry.queryDatasets('src', visit=visit, findFirst=True)
     ref_cat = get_ref_cat(butler, visit, band, center_radec)
     df = None
     detectors = set()
@@ -299,11 +305,10 @@ def get_center_radec(butler, visit, opsim_db=None):
     if opsim_db is not None:
         # Get the pointing center from the opsim db file.
         conn = sqlite3.connect(opsim_db)
-        df = pd.read_sql('select descDitheredRA, descDitheredDec '
-                         'from Summary where '
-                         f'obshistid={visit} limit 1', conn)
-        return (np.degrees(df.iloc[0].descDitheredRA),
-                np.degrees(df.iloc[0].descDitheredDec))
+        df = pd.read_sql('select fieldRA, fieldDec '
+                         'from observations where '
+                         f'observationId={visit} limit 1', conn)
+        return (df.iloc[0].fieldRA, df.iloc[0].fieldDec)
 
     # Return the center of detector=94, if it's available.
     ref_cat = RefCat(butler)
@@ -311,7 +316,7 @@ def get_center_radec(butler, visit, opsim_db=None):
                                              findFirst=True)
     dataId = dict()
     dataId.update(list(dsrefs)[0].dataId)
-    dataId['detector'] = 94
+    dataId['detector'] = 4
     try:
         ccd_center = ref_cat.ccd_center(dataId)
     except Exception as eobj:
@@ -345,8 +350,7 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # Gather ra, dec values for point sources in src catalogs.
     src_ra, src_dec = [], []
     band = None
-    dsrefs = butler.registry.queryDatasets('src', visit=visit,
-                                             findFirst=True)
+    dsrefs = butler.registry.queryDatasets('src', visit=visit, findFirst=True)
     for dsref in dsrefs:
         try:
             src = butler.get(dsref)
@@ -378,11 +382,12 @@ def plot_detection_efficiency(butler, visit, df, ref_cat, x_range=None,
     # have a detected point source from the src catalogs.
     pixnums = hp.ang2pix(nside, src_ra, src_dec, lonlat=False)
     pixnums_true = hp.ang2pix(nside, ref_ra, ref_dec, lonlat=False)
-    ref_index = ((ref_cat.get('variable') == 0) &
-                 (ref_cat.get('resolved') == 0) &
-                 np.in1d(pixnums_true, np.unique(pixnums)))
+#    ref_index = ((ref_cat.get('variable') == 0) &
+#                 (ref_cat.get('resolved') == 0) &
+#                 np.in1d(pixnums_true, np.unique(pixnums)))
+    ref_index = np.in1d(pixnums_true, np.unique(pixnums))
 
-    ref_mags0 = ref_cat.get(f'lsst_{band}')
+    ref_mags0 = ref_cat.get(f'lsst_{band}_flux')
     if x_range is None:
         x_range = min(ref_mags0), max(ref_mags0)
 
@@ -466,7 +471,7 @@ def plot_dmags(psf_mags, ref_mags, xlabel='psf_mag - ref_mag', sn_min=150,
 def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                          opsim_db=None, figsize=(12, 10), max_offset=0.1,
                          sn_min=150, instrument='LSSTCam-imSim',
-                         collections=None, skip_plots=False):
+                         collections=None, skip_plots=False, detector=None):
     """
     Create the single-frame validation plots.
 
@@ -503,6 +508,7 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
         butler = daf_butler.Butler(repo)
         collections = list(butler.registry.queryCollections())
 
+    print(collections)
     butler = daf_butler.Butler(repo, collections=collections)
 
     try:
@@ -528,6 +534,8 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     else:
         df = pd.read_pickle(pickle_file)
 
+    if detector is not None:
+        df = df.query(f"detector=={detector}")
     median_offset = np.median(df['offset'])
     if not skip_plots:
         fig = plt.figure(figsize=figsize)
@@ -601,12 +609,13 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
 
     x_range = (12, 26)
     if not skip_plots:
-        ax1 = fig.add_subplot(2, 2, 4)
-        plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
-        plt.title(f'v{visit}-{band}')
-
-        ax2 = ax1.twinx()
-        ax2.set_ylabel('S/N', color='red')
+        pass
+#        ax1 = fig.add_subplot(2, 2, 4)
+#        plot_detection_efficiency(butler, visit, df, ref_cat, x_range=x_range)
+#        plt.title(f'v{visit}-{band}')
+#
+#        ax2 = ax1.twinx()
+#        ax2.set_ylabel('S/N', color='red')
 
     snr = df[f'{flux_type}_instFlux']/df[f'{flux_type}_instFluxErr']
     ref_mags, SNR_values, _ = plot_binned_stats(df['ref_mag'], snr,
@@ -615,20 +624,23 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                                                 skip_plots=skip_plots)
     m5, mag_func = extrapolate_nsigma(ref_mags, SNR_values, nsigma=5)
     if not skip_plots:
-        plt.xlim(*x_range)
-
-        plt.yscale('log')
-        ymin, ymax = 1, plt.axis()[-1]
-        plt.ylim(ymin, ymax)
-        plt.axhline(5, linestyle=':', color='red')
-        yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
-        plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
-        if opsim_db is not None:
-            plt.axvline(get_five_sigma_depth(opsim_db, visit),
-                        linestyle='--', color='red')
+#        plt.xlim(*x_range)
+#
+#        plt.yscale('log')
+#        ymin, ymax = 1, plt.axis()[-1]
+#        plt.ylim(ymin, ymax)
+#        plt.axhline(5, linestyle=':', color='red')
+#        yvals = np.logspace(np.log10(ymin), np.log10(ymax), 50)
+#        plt.plot(mag_func(np.log10(yvals)), yvals, linestyle=':', color='red')
+##        if opsim_db is not None:
+#            plt.axvline(get_five_sigma_depth(opsim_db, visit),
+#                        linestyle='--', color='red')
 
         plt.tight_layout()
-        outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
+        if detector is None:
+            outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}.png')
+        else:
+            outfile = os.path.join(outdir, f'sfp_validation_v{visit}-{band}-det{detector:03d}.png')
         plt.savefig(outfile)
 
     # Make plot of psf_mag - calib_mag distribution.
@@ -637,7 +649,10 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
     dmag_calib_median = psf_mag_check(repo, visit, sn_min=sn_min)
     if not skip_plots:
         plt.title(f'v{visit}-{band}')
-        outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+        if detector is None:
+            outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}.png')
+        else:
+            outfile = os.path.join(outdir, f'delta_mag_calib_v{visit}-{band}-det{detector:03d}.png')
         plt.savefig(outfile)
 
     # Make plot of psf_mag - ref_mag distribution.
@@ -649,18 +664,23 @@ def sfp_validation_plots(repo, visit, outdir='.', flux_type='base_PsfFlux',
                                  sn_min=sn_min, skip_plots=skip_plots)
     if not skip_plots:
         plt.title(f'v{visit}-{band}')
-        outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
+        if detector is None:
+            outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}.png')
+        else:
+            outfile = os.path.join(outdir, f'delta_mag_ref_v{visit}-{band}-det{detector:03d}.png')
         plt.savefig(outfile)
 
         # Make psf whisker plot.
-        psf_whisker_plot(butler, visit)
-        outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
-        plt.savefig(outfile)
+#        psf_whisker_plot(butler, visit)
+#        outfile = os.path.join(outdir, f'psf_whisker_plot_v{visit}-{band}.png')
+#        plt.savefig(outfile)
 
     df = pd.DataFrame(data=dict(visit=[visit], ast_offset=[median_offset],
                                 dmag_ref_median=[dmag_ref_median],
                                 dmag_calib_median=[dmag_calib_median],
-                                T_median=[tmed], m5=[m5], band=[band]))
+                                T_median=[tmed],
+                                #m5=[m5],
+                                band=[band]))
     metrics_file = os.path.join(outdir, f'sfp_metrics_v{visit}-{band}.pkl')
     df.to_pickle(metrics_file)
 
